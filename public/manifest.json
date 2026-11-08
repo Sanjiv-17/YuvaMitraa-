@@ -1,0 +1,17 @@
+{
+  "name": "YuvaMitraa - Youth Skill Development & Job Finder",
+  "short_name": "YuvaMitraa",
+  "description": "AI-Powered Youth Skill Development and Internship Finder Platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#FF7A00",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192 512x512 1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
