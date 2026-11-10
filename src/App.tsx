@@ -1,53 +1,54 @@
 import React, { useState } from 'react';
-import { Sparkles, Bot, Smartphone, Monitor } from 'lucide-react';
+import { Bot, Smartphone, Monitor } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/common/Navbar';
 import { Sidebar } from './components/common/Sidebar';
 import { BottomNav } from './components/common/BottomNav';
-import { FirstLaunchModal } from './components/common/FirstLaunchModal';
 import { FloatingChat } from './components/common/FloatingChat';
 import { HomeDashboard } from './components/home/HomeDashboard';
-import { JobFinder } from './components/jobs/JobFinder';
-import { JobDetailModal } from './components/jobs/JobDetailModal';
-import { CourseCatalog } from './components/courses/CourseCatalog';
-import { CoursePlayer } from './components/courses/CoursePlayer';
-import { CertificateView } from './components/certificates/CertificateView';
-import { ResumeBuilder } from './components/resume/ResumeBuilder';
-import { MockInterview } from './components/interview/MockInterview';
-import { CareerRoadmap } from './components/roadmap/CareerRoadmap';
-import { GovtSchemes } from './components/schemes/GovtSchemes';
-import { ApplicationTracker } from './components/applications/ApplicationTracker';
-import { RecruiterPortal } from './components/recruiter/RecruiterPortal';
+import { LearnSection } from './components/learn/LearnSection';
+import { OpportunitiesSection } from './components/opportunities/OpportunitiesSection';
+import { AIAssistantSection } from './components/assistant/AIAssistantSection';
 import { ProfilePage } from './components/profile/ProfilePage';
-import { SettingsModal } from './components/settings/SettingsModal';
-import { AuthModal } from './components/auth/AuthModal';
 import { AdminDashboard } from './components/admin/AdminDashboard';
+import { RecruiterPortal } from './components/recruiter/RecruiterPortal';
+import { JobDetailModal } from './components/jobs/JobDetailModal';
+import { SettingsModal } from './components/settings/SettingsModal';
 import { LoginScreen } from './components/auth/LoginScreen';
 
 const MainScreenContent: React.FC = () => {
   const { activeTab } = useApp();
 
-  return (
-    <>
-      {activeTab === 'home' && <HomeDashboard />}
-      {activeTab === 'jobs' && <JobFinder />}
-      {activeTab === 'courses' && <CourseCatalog />}
-      {activeTab === 'course-player' && <CoursePlayer />}
-      {activeTab === 'certificates' && <CertificateView />}
-      {activeTab === 'resume' && <ResumeBuilder />}
-      {activeTab === 'interview' && <MockInterview />}
-      {activeTab === 'roadmap' && <CareerRoadmap />}
-      {activeTab === 'schemes' && <GovtSchemes />}
-      {activeTab === 'applications' && <ApplicationTracker />}
-      {activeTab === 'recruiter' && <RecruiterPortal />}
-      {activeTab === 'admin' && <AdminDashboard />}
-      {activeTab === 'profile' && <ProfilePage />}
-    </>
-  );
+  if (activeTab === 'home') {
+    return <HomeDashboard />;
+  }
+  if (activeTab === 'learn' || activeTab === 'courses' || activeTab === 'course-player' || activeTab === 'certificates') {
+    const sub = activeTab === 'certificates' ? 'certificates' : (activeTab === 'course-player' ? 'player' : 'catalog');
+    return <LearnSection key={`learn-${sub}`} initialSubTab={sub} />;
+  }
+  if (activeTab === 'opportunities' || activeTab === 'jobs' || activeTab === 'schemes' || activeTab === 'applications') {
+    const sub = activeTab === 'schemes' ? 'schemes' : (activeTab === 'applications' ? 'applications' : 'jobs');
+    return <OpportunitiesSection key={`opp-${sub}`} initialSubTab={sub} />;
+  }
+  if (activeTab === 'ai-assistant' || activeTab === 'assistant' || activeTab === 'resume' || activeTab === 'interview' || activeTab === 'roadmap') {
+    const sub = activeTab === 'resume' ? 'resume' : (activeTab === 'interview' ? 'interview' : (activeTab === 'roadmap' ? 'roadmap' : 'chat'));
+    return <AIAssistantSection key={`ai-${sub}`} initialSubTab={sub} />;
+  }
+  if (activeTab === 'profile') {
+    return <ProfilePage />;
+  }
+  if (activeTab === 'admin') {
+    return <AdminDashboard />;
+  }
+  if (activeTab === 'recruiter') {
+    return <RecruiterPortal />;
+  }
+
+  return <HomeDashboard />;
 };
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated, viewportMode, setViewportMode } = useApp();
+  const { isAuthenticated, viewportMode, setViewportMode, setActiveTab } = useApp();
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -56,7 +57,7 @@ const AppContent: React.FC = () => {
     return <LoginScreen />;
   }
 
-  // MOBILE SCREEN VIEWPORT: Fixed exactly to 390px smartphone frame
+  // MOBILE SCREEN VIEWPORT: Fixed smartphone frame
   if (viewportMode === 'mobile') {
     return (
       <div className="min-h-screen bg-slate-900 text-slate-900 dark:text-slate-100 flex flex-col items-center justify-start sm:justify-center p-1 sm:p-6 font-['Poppins',sans-serif]">
@@ -82,13 +83,12 @@ const AppContent: React.FC = () => {
           </div>
         </div>
 
-        {/* Realistic Smartphone Frame (Fixed to mobile screen) */}
+        {/* Smartphone Frame */}
         <div className="w-full max-w-[400px] h-[844px] bg-slate-950 rounded-[46px] p-2.5 shadow-2xl ring-8 ring-slate-800/90 border-4 border-slate-700 flex flex-col relative overflow-hidden">
           
-          {/* iOS / Android Status Bar */}
+          {/* Status Bar */}
           <div className="text-white px-5 pt-2 pb-1 flex items-center justify-between text-[11px] font-semibold tracking-wider flex-shrink-0">
             <span>9:41</span>
-            {/* Dynamic Island Notch */}
             <div className="w-24 h-4 bg-black rounded-full flex items-center justify-center gap-1.5">
               <div className="w-2 h-2 rounded-full bg-slate-800"></div>
               <div className="w-2.5 h-2.5 rounded-full bg-slate-900 border border-slate-700"></div>
@@ -115,16 +115,7 @@ const AppContent: React.FC = () => {
             </main>
 
             {/* Mobile Bottom Navigation */}
-            <BottomNav onOpenAssistant={() => setIsChatOpen(true)} />
-
-            {/* Floating AI Study Assistant Trigger */}
-            <button
-              onClick={() => setIsChatOpen(true)}
-              className="absolute bottom-18 right-4 z-30 flex items-center gap-1.5 p-3 rounded-full bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white shadow-xl shadow-orange-500/30 hover:scale-105 active:scale-95 transition-all cursor-pointer"
-              title="Open AI Study & Career Mentor"
-            >
-              <Bot className="w-5 h-5 animate-bounce" />
-            </button>
+            <BottomNav onOpenAssistant={() => setActiveTab('ai-assistant')} />
           </div>
 
           {/* Bottom Home Indicator Bar */}
@@ -132,11 +123,8 @@ const AppContent: React.FC = () => {
         </div>
 
         {/* Global Modals */}
-        <FloatingChat isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
         <JobDetailModal />
-        <FirstLaunchModal />
         <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-        <AuthModal />
       </div>
     );
   }
@@ -157,42 +145,28 @@ const AppContent: React.FC = () => {
         </main>
       </div>
 
-      {/* Floating AI Study Assistant Trigger Button */}
+      {/* Floating AI Study Assistant Quick-Launcher */}
       <button
-        onClick={() => setIsChatOpen(true)}
+        onClick={() => setActiveTab('ai-assistant')}
         className="fixed bottom-20 lg:bottom-6 right-5 z-40 flex items-center gap-2.5 px-4 py-3 rounded-full bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white font-bold text-xs shadow-xl shadow-orange-500/30 hover:scale-105 active:scale-95 transition-all cursor-pointer group"
-        title="Open AI Study & Career Mentor"
+        title="Open AI Career Assistant"
       >
         <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
-          <Bot className="w-4 h-4 animate-bounce" />
+          <Bot className="w-4 h-4" />
         </div>
-        <span className="hidden sm:inline">AI Study Assistant</span>
-        <span className="sm:hidden">Ask AI</span>
+        <span className="hidden sm:inline">AI Career Assistant</span>
+        <span className="sm:hidden">AI Mentor</span>
       </button>
 
-      {/* Floating AI Study Assistant Modal / Drawer */}
-      <FloatingChat
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-      />
-
-      {/* Job Details Modal with Gemini AI Eligibility Result */}
+      {/* Global Modals */}
       <JobDetailModal />
-
-      {/* First Launch Language Selector Modal */}
-      <FirstLaunchModal />
-
-      {/* Settings & Accessibility Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
 
-      {/* Authentication & Role Onboarding Modal */}
-      <AuthModal />
-
       {/* Mobile Bottom Tab Navigation */}
-      <BottomNav onOpenAssistant={() => setIsChatOpen(true)} />
+      <BottomNav onOpenAssistant={() => setActiveTab('ai-assistant')} />
 
     </div>
   );

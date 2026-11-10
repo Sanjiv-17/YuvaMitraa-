@@ -1,17 +1,15 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { 
   getAuth, 
-  RecaptchaVerifier, 
-  signInWithPhoneNumber, 
-  ConfirmationResult, 
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
   User as FirebaseUser,
   GoogleAuthProvider,
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
-  sendSignInLinkToEmail,
-  isSignInWithEmailLink,
-  signInWithEmailLink,
   onAuthStateChanged,
   signOut,
   UserCredential
@@ -58,7 +56,53 @@ export interface GoogleAuthUserResult {
   photoURL: string;
 }
 
-// Seamless Google OAuth fallback when Firebase Google provider isn't enabled in console
+/**
+ * 1. Email & Password Authentication (Login)
+ */
+export async function loginWithEmailPassword(email: string, password: string): Promise<UserCredential> {
+  const cleanEmail = email.trim().toLowerCase();
+  return await signInWithEmailAndPassword(auth, cleanEmail, password);
+}
+
+/**
+ * 2. Email & Password Registration (Direct signup without OTP)
+ */
+export async function registerWithEmailPassword(
+  name: string,
+  email: string,
+  password: string
+): Promise<UserCredential> {
+  const cleanEmail = email.trim().toLowerCase();
+  const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+  
+  if (credential.user && name.trim()) {
+    try {
+      await updateProfile(credential.user, {
+        displayName: name.trim()
+      });
+    } catch (profileErr) {
+      console.warn('Could not update Firebase display name immediately:', profileErr);
+    }
+  }
+
+  return credential;
+}
+
+/**
+ * 3. Send Password Reset Email Link
+ */
+export async function sendFirebasePasswordResetEmail(email: string): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase();
+  const actionCodeSettings = {
+    url: window.location.origin,
+    handleCodeInApp: true
+  };
+  await sendPasswordResetEmail(auth, cleanEmail, actionCodeSettings);
+}
+
+/**
+ * Direct Google OAuth fallback when Firebase Google provider isn't enabled in console
+ */
 export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserResult } | null> {
   return new Promise((resolve, reject) => {
     const clientId = firebaseConfig.apiKey ? (defaultFirebaseConfig as any).oAuthClientId : '';
@@ -120,7 +164,6 @@ export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserRes
     if (typeof window !== 'undefined' && (window as any).google?.accounts?.oauth2) {
       initTokenFlow();
     } else {
-      // Dynamic fallback script load if needed
       const script = document.createElement('script');
       script.src = 'https://accounts.google.com/gsi/client';
       script.async = true;
@@ -135,7 +178,9 @@ export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserRes
   });
 }
 
-// 1. Google Authentication: Popup with Redirect Fallback + OAuth Fallback
+/**
+ * 4. Google Authentication: Popup with Redirect Fallback + OAuth Fallback
+ */
 export async function signInWithGoogle(): Promise<UserCredential | { user: GoogleAuthUserResult } | null> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
@@ -163,13 +208,14 @@ export async function signInWithGoogle(): Promise<UserCredential | { user: Googl
   }
 }
 
-// Check redirect result on page load (silences uninitiated passive errors)
+/**
+ * Check redirect result on page load (silences uninitiated passive errors)
+ */
 export async function checkRedirectResult(): Promise<UserCredential | null> {
   try {
     const result = await getRedirectResult(auth);
     return result;
   } catch (err: any) {
-    // Suppress passive configuration-not-found on initial boot if no redirect is pending
     if (err.code === 'auth/configuration-not-found') {
       return null;
     }
@@ -177,145 +223,20 @@ export async function checkRedirectResult(): Promise<UserCredential | null> {
   }
 }
 
-// 2. Mobile Phone Authentication with Fresh RecaptchaVerifier on every attempt
-declare global {
-  interface Window {
-    recaptchaVerifier?: RecaptchaVerifier | null;
-  }
-}
-
-export function clearRecaptchaVerifier(containerId: string = 'recaptcha-container'): void {
-  if (typeof window !== 'undefined' && window.recaptchaVerifier) {
-    try {
-      window.recaptchaVerifier.clear();
-    } catch {
-      // ignore
-    }
-    window.recaptchaVerifier = null;
-  }
-  if (typeof document !== 'undefined') {
-    const container = document.getElementById(containerId);
-    if (container) {
-      container.innerHTML = '';
-      // Replace with pristine DOM element to clear internal grecaptcha state
-      if (container.parentNode) {
-        const fresh = document.createElement('div');
-        fresh.id = containerId;
-        container.parentNode.replaceChild(fresh, container);
-      }
-    }
-  }
-}
-
-export function createFreshRecaptchaVerifier(containerId: string = 'recaptcha-container'): RecaptchaVerifier {
-  // Before creating a new one, call .clear() on the old one and empty the container div
-  clearRecaptchaVerifier(containerId);
-
-  if (typeof document !== 'undefined') {
-    const container = document.getElementById(containerId);
-    if (container) {
-      container.innerHTML = '';
-    }
-  }
-
-  const verifier = new RecaptchaVerifier(auth, containerId, {
-    size: 'invisible',
-    callback: () => {
-      // reCAPTCHA solved automatically
-    },
-    'expired-callback': () => {
-      clearRecaptchaVerifier(containerId);
-    }
-  });
-
-  if (typeof window !== 'undefined') {
-    window.recaptchaVerifier = verifier;
-  }
-
-  return verifier;
-}
-
-export const getOrCreateRecaptchaVerifier = createFreshRecaptchaVerifier;
-
-export async function sendMobileOtp(
-  phoneOrDigits: string, 
-  containerId: string = 'recaptcha-container',
-  countryPrefix: string = '+91'
-): Promise<ConfirmationResult> {
-  const digits = phoneOrDigits.replace(/[^0-9]/g, '');
-  if (digits.length < 7 || digits.length > 15) {
-    const err: any = new Error('Please enter a valid mobile number.');
-    err.code = 'auth/invalid-phone-number';
-    throw err;
-  }
-
-  const cleanPrefix = countryPrefix.startsWith('+') ? countryPrefix : `+${countryPrefix}`;
-  const formattedNumber = phoneOrDigits.startsWith('+') 
-    ? phoneOrDigits 
-    : `${cleanPrefix}${digits.length >= 10 ? digits.slice(-10) : digits}`;
-
-  // Create a fresh RecaptchaVerifier at the start of every send-OTP attempt instead of reusing one
-  const verifier = createFreshRecaptchaVerifier(containerId);
-
+/**
+ * 5. Sign Out User
+ */
+export async function signOutUser(): Promise<void> {
   try {
-    const confirmation = await signInWithPhoneNumber(auth, formattedNumber, verifier);
-    return confirmation;
-  } catch (err: any) {
-    // In the catch block of the send-OTP function, call window.recaptchaVerifier.clear(), set it to null, and empty the recaptcha container div's innerHTML
-    if (typeof window !== 'undefined' && window.recaptchaVerifier) {
-      try {
-        window.recaptchaVerifier.clear();
-      } catch {
-        // ignore
-      }
-      window.recaptchaVerifier = null;
-    }
-    if (typeof document !== 'undefined') {
-      const container = document.getElementById(containerId);
-      if (container) {
-        container.innerHTML = '';
-      }
-    }
-    throw err;
+    await signOut(auth);
+  } catch (err) {
+    console.warn('Sign out warning:', err);
   }
 }
 
-// 3. Email Authentication with sendSignInLinkWithEmail
-export async function sendEmailSignInLink(email: string): Promise<string> {
-  const cleanEmail = email.trim().toLowerCase();
-  const actionCodeSettings = {
-    url: window.location.origin,
-    handleCodeInApp: true,
-  };
-
-  await sendSignInLinkToEmail(auth, cleanEmail, actionCodeSettings);
-  localStorage.setItem('emailForSignIn', cleanEmail);
-  return cleanEmail;
-}
-
-export async function completeEmailLinkSignInIfPresent(): Promise<UserCredential | null> {
-  if (typeof window === 'undefined') return null;
-
-  if (isSignInWithEmailLink(auth, window.location.href)) {
-    let email = localStorage.getItem('emailForSignIn');
-    if (!email) {
-      email = window.prompt('Please provide your email address to complete sign in:');
-    }
-
-    if (email) {
-      const result = await signInWithEmailLink(auth, email, window.location.href);
-      localStorage.removeItem('emailForSignIn');
-      // Clean query parameters from URL without reloading
-      if (window.history && window.history.replaceState) {
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
-      return result;
-    }
-  }
-  return null;
-}
-
-// Connection test helper
+/**
+ * Connection test helper
+ */
 export async function testConnection(): Promise<boolean> {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
@@ -329,7 +250,9 @@ export async function testConnection(): Promise<boolean> {
   }
 }
 
-// Sync user profile document in Firestore
+/**
+ * Sync user profile document in Firestore
+ */
 export async function syncUserProfileToFirestore(uid: string, profile: any): Promise<void> {
   if (!auth.currentUser || (auth.currentUser.uid !== uid && auth.currentUser.email !== 'sanjivsanju017@gmail.com')) {
     return;
@@ -380,10 +303,12 @@ export async function getUserProfileFromFirestore(uid: string): Promise<any | nu
 }
 
 export { 
-  RecaptchaVerifier, 
-  signInWithPhoneNumber, 
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
   onAuthStateChanged, 
   signOut 
 };
-export const sendFirebasePhoneOtp = sendMobileOtp;
-export type { ConfirmationResult, FirebaseUser, UserCredential };
+
+export type { FirebaseUser, UserCredential };

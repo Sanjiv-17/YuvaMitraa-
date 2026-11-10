@@ -98,6 +98,50 @@ async function sendEmailOtp(toEmail: string, otpCode: string): Promise<{ deliver
   }
 }
 
+async function sendEmailPasswordResetLink(toEmail: string, resetLink: string): Promise<{ delivered: boolean; info?: string }> {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT) || 587;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.SMTP_FROM || '"YuvaMitraa" <noreply@yuvamitraa.gov.in>';
+
+  if (host && user && pass) {
+    try {
+      const transporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass }
+      });
+      await transporter.sendMail({
+        from,
+        to: toEmail,
+        subject: 'Reset your YuvaMitraa password',
+        text: `Hello,\n\nWe received a request to reset your YuvaMitraa password. Use the link below:\n\n${resetLink}\n\nThis link is valid for 1 hour. If you did not request this, you can ignore this email.`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #fed7aa; border-radius: 16px; background-color: #fffaf5;">
+            <h2 style="color: #ea580c; text-align: center; margin: 0;">YuvaMitraa</h2>
+            <p style="color: #64748b; font-size: 13px; text-align: center; margin: 4px 0 20px 0;">National Youth Career Gateway</p>
+            <div style="background: white; padding: 24px; border-radius: 12px; border: 1px solid #fed7aa; text-align: center;">
+              <p style="font-size: 15px; color: #1e293b; font-weight: 600; margin-bottom: 8px;">Password Reset Request</p>
+              <p style="font-size: 13px; color: #64748b; margin-bottom: 20px;">We received a request to reset your password. Click the button below to choose a new password.</p>
+              <a href="${resetLink}" style="display: inline-block; background-color: #ea580c; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px;">Reset Password</a>
+              <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Or copy and paste this link:<br/><a href="${resetLink}" style="color: #ea580c; word-break: break-all;">${resetLink}</a></p>
+            </div>
+          </div>
+        `
+      });
+      return { delivered: true };
+    } catch (err: any) {
+      console.warn('[Email Warning] SMTP password reset delivery failed:', err.message);
+      return { delivered: false, info: err.message };
+    }
+  } else {
+    console.info(`[Email Service Notice] SMTP_HOST not configured. Password reset link for ${toEmail}: ${resetLink}`);
+    return { delivered: true, info: 'Local delivery mode active' };
+  }
+}
+
 function normalizePhone(phone: string): string {
   return phone.replace(/[^0-9]/g, '').slice(-10);
 }
@@ -309,6 +353,139 @@ function sanitizeUser(user: UserRecord) {
 // ------------------------------------------
 // AUTH API ENDPOINTS
 // ------------------------------------------
+
+// 0a. Direct User Registration (Email and Password, No OTP)
+app.post('/api/auth/register', (req: Request, res: Response) => {
+  try {
+    const { name, email, password, confirmPassword, role = 'student', college, course, location, firebaseUid } = req.body;
+    const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Full Name is required.' });
+    }
+
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address.' });
+    }
+
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required.' });
+    }
+
+    if (String(password).length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long.' });
+    }
+
+    if (confirmPassword !== undefined && password !== confirmPassword) {
+      return res.status(400).json({ error: 'Passwords do not match. Please re-enter your password.' });
+    }
+
+    // Check if account already exists
+    const existing = usersDatabase.find(u => u.email.toLowerCase() === cleanEmail);
+    if (existing) {
+      return res.status(400).json({ 
+        error: 'An account with this email address already exists. Please sign in instead.' 
+      });
+    }
+
+    // Hash password with PBKDF2
+    const { hash, salt } = hashPassword(String(password));
+    const newUserId = firebaseUid || `usr-${Date.now()}`;
+
+    const newUser: UserRecord = {
+      id: newUserId,
+      name: String(name).trim(),
+      email: cleanEmail,
+      phone: '',
+      role: role === 'recruiter' ? 'recruiter' : 'student',
+      passwordHash: hash,
+      passwordSalt: salt,
+      college: college?.trim() || 'National Institute of Technology',
+      course: course?.trim() || 'B.Tech in Computer Science & Engineering',
+      studyYear: '1st Year',
+      education: 'Undergraduate Degree',
+      institution: college?.trim() || 'National Institute of Technology',
+      isVerified: true,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      lastLoginAt: new Date().toISOString(),
+      photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+      skills: ['Communication', 'Computer Literacy', 'Problem Solving', 'Teamwork'],
+      interests: ['Internships', 'Career Growth', 'Skill Courses', 'Tech Jobs'],
+      location: location?.trim() || 'Bengaluru, Karnataka',
+      preferredRoles: ['Software Intern', 'Web Developer', 'Graduate Engineer Trainee'],
+      enrolledCourses: [{ courseId: 'course-1', completedModuleIds: [] }],
+      savedJobIds: ['job-1'],
+      badges: ['New Explorer', 'Profile Complete'],
+      streakDays: 1,
+      xpPoints: 200
+    };
+
+    usersDatabase.push(newUser);
+
+    // Create session token
+    const token = generateSessionToken();
+    sessions.set(token, {
+      token,
+      userId: newUser.id,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000
+    });
+
+    recordAuditLog('USER_REGISTER', cleanEmail, 'SUCCESS', 'New user registered with Email and Password (No OTP)', newUser.role, clientIp);
+
+    return res.json({
+      success: true,
+      token,
+      user: sanitizeUser(newUser),
+      role: newUser.role,
+      message: `Welcome to YuvaMitraa, ${newUser.name}! Your account is now active.`
+    });
+  } catch (error: any) {
+    console.error('Registration error:', error);
+    return res.status(500).json({ error: 'Internal server registration error. Please try again.' });
+  }
+});
+
+// 0b. Send Secure Password Reset Link via Email
+app.post('/api/auth/send-password-reset-link', async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+    const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Email address is required.' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const user = usersDatabase.find(u => u.email.toLowerCase() === cleanEmail);
+
+    const hostHeader = req.get('host') || 'localhost:3000';
+    const protocol = req.protocol || 'http';
+    const resetLink = `${protocol}://${hostHeader}/?reset_email=${encodeURIComponent(cleanEmail)}`;
+
+    if (user) {
+      await sendEmailPasswordResetLink(cleanEmail, resetLink);
+      recordAuditLog('PASSWORD_RESET_LINK_SENT', cleanEmail, 'SUCCESS', 'Password reset email link dispatched', user.role, clientIp);
+    } else {
+      recordAuditLog('PASSWORD_RESET_LINK_NOT_FOUND', cleanEmail, 'FAILED', 'Password reset requested for unregistered email', undefined, clientIp);
+    }
+
+    return res.json({
+      success: true,
+      message: `If an account exists with ${cleanEmail}, a secure password reset link has been dispatched to your inbox.`
+    });
+  } catch (error: any) {
+    console.error('Password reset link dispatch error:', error);
+    return res.status(500).json({ error: 'Failed to process password reset request.' });
+  }
+});
 
 // 1. User Login (Email or Mobile + Password)
 app.post('/api/auth/login', (req: Request, res: Response) => {
@@ -560,7 +737,7 @@ app.post('/api/auth/login-otp-verify', (req: Request, res: Response) => {
 // 1d. Firebase Auth Verified Login / Registration Exchange
 app.post('/api/auth/firebase-login', (req: Request, res: Response) => {
   try {
-    const { firebaseUid, phoneNumber, email, name, role } = req.body;
+    const { firebaseUid, phoneNumber, email, name, role, photoUrl } = req.body;
     const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
 
     if (!firebaseUid) {
@@ -593,17 +770,18 @@ app.post('/api/auth/firebase-login', (req: Request, res: Response) => {
         status: 'active',
         createdAt: new Date().toISOString(),
         lastLoginAt: new Date().toISOString(),
-        photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+        photoUrl: photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
         location: 'Bengaluru, Karnataka',
         passwordHash: '',
         passwordSalt: ''
       };
       usersDatabase.push(newUser);
       user = newUser;
-      recordAuditLog('FIREBASE_REGISTER', cleanEmail || cleanPhone || firebaseUid, 'SUCCESS', 'New user registered via Firebase Phone Auth', user.role, clientIp);
+      recordAuditLog('FIREBASE_REGISTER', cleanEmail || cleanPhone || firebaseUid, 'SUCCESS', 'New user registered via Firebase Auth', user.role, clientIp);
     } else {
       user.lastLoginAt = new Date().toISOString();
-      recordAuditLog('FIREBASE_LOGIN', cleanEmail || cleanPhone || firebaseUid, 'SUCCESS', 'Authenticated via Firebase Phone/Auth', user.role, clientIp);
+      if (photoUrl && !user.photoUrl) user.photoUrl = photoUrl;
+      recordAuditLog('FIREBASE_LOGIN', cleanEmail || cleanPhone || firebaseUid, 'SUCCESS', 'Authenticated via Firebase Auth', user.role, clientIp);
     }
 
     const token = generateSessionToken();

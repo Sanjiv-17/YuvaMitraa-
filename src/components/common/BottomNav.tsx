@@ -7,10 +7,10 @@ export const BottomNav: React.FC<{ onOpenAssistant: () => void }> = ({ onOpenAss
 
   const items = [
     { id: 'home', label: 'Home', icon: Home },
-    { id: 'jobs', label: 'Internships', icon: Briefcase },
-    { id: 'courses', label: 'Learn', icon: BookOpen },
-    { id: 'assistant', label: 'AI Assistant', icon: Sparkles, isAction: true },
-    { id: 'profile', label: 'Profile', icon: User },
+    { id: 'learn', label: 'Learn', icon: BookOpen },
+    { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, isAction: true },
+    { id: 'opportunities', label: 'Opportunities', icon: Briefcase },
+    { id: 'profile', label: 'My Profile', icon: User },
   ];
 
   return (

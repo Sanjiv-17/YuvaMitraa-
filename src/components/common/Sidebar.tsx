@@ -16,28 +16,32 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
+interface NavItem {
+  id: string;
+  label: string;
+  icon: any;
+  count?: number;
+  badge?: string;
+  ai?: boolean;
+}
+
 export const Sidebar: React.FC = () => {
   const { activeTab, setActiveTab, t, applications, certificates, isRecruiter, isAdmin } = useApp();
 
-  const navItems = [
-    { id: 'home', label: t('home'), icon: Home },
-    { id: 'jobs', label: t('jobs'), icon: Briefcase, badge: 'New' },
-    { id: 'courses', label: t('courses'), icon: BookOpen },
-    { id: 'resume', label: t('resumeBuilder'), icon: FileText, ai: true },
-    { id: 'interview', label: t('mockInterview'), icon: Mic, ai: true },
-    { id: 'roadmap', label: t('roadmap'), icon: Compass, ai: true },
-    { id: 'schemes', label: t('schemes'), icon: Landmark, badge: 'Govt' },
-    { id: 'applications', label: t('applications'), icon: CheckSquare, count: applications.length },
-    { id: 'certificates', label: t('certificates'), icon: Award, count: certificates.length },
-    { id: 'profile', label: t('profile'), icon: User },
+  const navItems: NavItem[] = [
+    { id: 'home', label: 'Home', icon: Home },
+    { id: 'learn', label: 'Learn', icon: BookOpen, count: certificates.length },
+    { id: 'opportunities', label: 'Opportunities', icon: Briefcase, count: applications.length, badge: 'Active' },
+    { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, ai: true },
+    { id: 'profile', label: 'My Profile', icon: User },
   ];
 
-  if (isRecruiter) {
-    navItems.splice(7, 0, { id: 'recruiter', label: 'Recruiter Portal', icon: Building2 });
+  if (isAdmin) {
+    navItems.push({ id: 'admin', label: 'Admin Dashboard', icon: Landmark, badge: 'Staff' });
   }
 
-  if (isAdmin) {
-    navItems.splice(7, 0, { id: 'admin', label: 'Admin Center', icon: Landmark, badge: 'Staff' });
+  if (isRecruiter) {
+    navItems.push({ id: 'recruiter', label: 'Recruiter Portal', icon: Building2 });
   }
 
   return (

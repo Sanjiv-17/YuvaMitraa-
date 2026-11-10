@@ -227,6 +227,42 @@ export async function verifyLoginOtpApi(identifier: string, otp: string, remembe
   return data;
 }
 
+export async function registerDirectApi(payload: {
+  name: string;
+  email: string;
+  password: string;
+  confirmPassword?: string;
+  role?: string;
+  college?: string;
+  course?: string;
+  location?: string;
+  firebaseUid?: string;
+}) {
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Registration failed');
+  }
+  return data;
+}
+
+export async function sendPasswordResetLinkApi(email: string) {
+  const res = await fetch('/api/auth/send-password-reset-link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to dispatch password reset link');
+  }
+  return data;
+}
+
 export async function registerInitApi(payload: {
   name: string;
   email: string;
@@ -404,6 +440,7 @@ export async function firebaseLoginApi(payload: {
   email?: string;
   name?: string;
   role?: string;
+  photoUrl?: string;
 }) {
   const res = await fetch('/api/auth/firebase-login', {
     method: 'POST',

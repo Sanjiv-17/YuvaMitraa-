@@ -57,7 +57,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      setActiveTab('jobs');
+      setActiveTab('opportunities');
     }
   };
 
