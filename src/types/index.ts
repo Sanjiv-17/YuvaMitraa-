@@ -31,6 +31,8 @@ export interface UserProfile {
   adminLevel?: string;
   isVerified?: boolean;
   graduationYear: string;
+  age?: number;
+  preferredRoles?: string[];
   skills: string[];
   interests: string[];
   location: string;
@@ -202,3 +204,16 @@ export interface EligibilityResult {
   suggestions: string[];
   recommendedCourseKeywords: string[];
 }
+
+export interface ReportedJob {
+  id: string;
+  jobId: string;
+  jobTitle: string;
+  company: string;
+  reportedByEmail: string;
+  reason: string;
+  details?: string;
+  reportedAt: string;
+  status: 'pending' | 'resolved' | 'dismissed';
+}
+

@@ -221,9 +221,10 @@ export const MockInterview: React.FC = () => {
       }
 
       // Award XP
+      const currentBadges = user?.badges || [];
       updateUser({
-        xpPoints: user.xpPoints + 75,
-        badges: user.badges.includes('Interview Ace') ? user.badges : [...user.badges, 'Interview Ace']
+        xpPoints: (user?.xpPoints ?? 1250) + 75,
+        badges: currentBadges.includes('Interview Ace') ? currentBadges : [...currentBadges, 'Interview Ace']
       });
     } catch (err) {
       console.error(err);

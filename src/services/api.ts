@@ -303,6 +303,120 @@ export async function resetPasswordApi(identifier: string, otp: string, newPassw
   return data;
 }
 
+// ==========================================
+// UNIFIED OTP & REGISTRATION CLIENT APIS
+// ==========================================
+
+export async function sendOtpApi(identifier: string, type: 'email' | 'mobile') {
+  const res = await fetch('/api/auth/otp/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, type }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to send OTP');
+  }
+  return data;
+}
+
+export async function verifyOtpApi(
+  identifier: string, 
+  otp: string, 
+  type: 'email' | 'mobile', 
+  rememberMe: boolean = true
+) {
+  const res = await fetch('/api/auth/otp/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, otp, type, rememberMe }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to verify OTP');
+  }
+  return data;
+}
+
+export async function resendOtpNewApi(identifier: string, type: 'email' | 'mobile') {
+  const res = await fetch('/api/auth/otp/resend', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, type }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to resend OTP');
+  }
+  return data;
+}
+
+export interface RegisterCompleteData {
+  registrationToken: string;
+  firebaseUid?: string;
+  name: string;
+  email: string;
+  phone: string;
+  educationLevel: string;
+  skills: string[];
+  interests: string[];
+  role?: 'student' | 'recruiter';
+  college?: string;
+  course?: string;
+  age?: number;
+  location?: string;
+  preferredRoles?: string[];
+}
+
+export async function completeRegistrationApi(payload: RegisterCompleteData) {
+  const res = await fetch('/api/auth/otp/register-complete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to complete registration');
+  }
+  return data;
+}
+
+export async function updateProfileApi(token: string, profile: Partial<UserProfile>) {
+  const res = await fetch('/api/user/profile', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(profile),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to update profile');
+  }
+  return data;
+}
+
+
+export async function firebaseLoginApi(payload: {
+  firebaseUid: string;
+  phoneNumber?: string;
+  email?: string;
+  name?: string;
+  role?: string;
+}) {
+  const res = await fetch('/api/auth/firebase-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to authenticate Firebase session');
+  }
+  return data;
+}
+
 export async function googleSignInApi(email: string, name?: string, photoUrl?: string) {
   const res = await fetch('/api/auth/google', {
     method: 'POST',
@@ -339,6 +453,77 @@ export async function logoutApi(token: string) {
   } catch (err) {
     // ignore
   }
+}
+
+export async function logoutAllApi(token: string) {
+  const res = await fetch('/api/auth/logout-all', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error('Failed to logout from all devices');
+  return await res.json();
+}
+
+export async function deleteAccountApi(token: string) {
+  const res = await fetch('/api/user/account', {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error('Failed to delete account');
+  return await res.json();
+}
+
+export async function uploadProfilePhotoApi(token: string, photoDataUrl: string) {
+  const res = await fetch('/api/user/profile-photo', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}` 
+    },
+    body: JSON.stringify({ photoDataUrl })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to update photo');
+  return data;
+}
+
+export async function uploadResumeApi(token: string, resumeFileName: string, resumeText: string) {
+  const res = await fetch('/api/user/resume-upload', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}` 
+    },
+    body: JSON.stringify({ resumeFileName, resumeText })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to upload resume');
+  return data;
+}
+
+export async function changePasswordApi(token: string, currentPassword: string, newPassword: string) {
+  const res = await fetch('/api/user/change-password', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}` 
+    },
+    body: JSON.stringify({ currentPassword, newPassword })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to update password');
+  return data;
+}
+
+export async function reportJobApi(payload: { jobId: string; jobTitle: string; company: string; reason: string; details?: string; userEmail?: string }) {
+  const res = await fetch('/api/jobs/report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to report job');
+  return data;
 }
 
 // Admin APIs
@@ -378,3 +563,25 @@ export async function fetchAdminAuditLogsApi(token: string) {
   if (!res.ok) throw new Error('Failed to load audit logs');
   return await res.json();
 }
+
+export async function fetchReportedJobsApi(token: string) {
+  const res = await fetch('/api/admin/reported-jobs', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error('Failed to load reported jobs');
+  return await res.json();
+}
+
+export async function actionReportedJobApi(token: string, id: string, action: 'resolve' | 'dismiss') {
+  const res = await fetch(`/api/admin/reported-jobs/${id}/action`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}` 
+    },
+    body: JSON.stringify({ action })
+  });
+  if (!res.ok) throw new Error('Failed to take action on reported job');
+  return await res.json();
+}
+

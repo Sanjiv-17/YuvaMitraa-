@@ -38,7 +38,7 @@ export const JobDetailModal: React.FC = () => {
   const [eligibilityResult, setEligibilityResult] = useState<EligibilityResult | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [coverLetter, setCoverLetter] = useState(
-    `Hello ${selectedJobForDetail?.company || 'Team'}, I am excited to apply for the ${selectedJobForDetail?.title} position. With my background in ${user.education} and skills in ${user.skills.slice(0, 3).join(', ')}, I am confident in adding real value to your projects.`
+    `Hello ${selectedJobForDetail?.company || 'Team'}, I am excited to apply for the ${selectedJobForDetail?.title} position. With my background in ${user?.education || 'relevant coursework'} and skills in ${(user?.skills || []).slice(0, 3).join(', ') || 'practical technologies'}, I am confident in adding real value to your projects.`
   );
   const [appliedSuccess, setAppliedSuccess] = useState(false);
 

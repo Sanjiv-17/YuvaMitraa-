@@ -1031,6 +1031,215 @@ Hygiene Checklist:
         explanation: 'Helpline number 1930 connects Indian citizens directly to the Citizen Financial Cyber Fraud Reporting and Management System.'
       }
     ]
+  },
+  {
+    id: 'course-10',
+    title: 'Java Programming & Object-Oriented Software Design',
+    category: 'Tech',
+    thumbnail: 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=600&q=80',
+    durationHours: 14,
+    modulesCount: 2,
+    level: 'Intermediate',
+    rating: 4.9,
+    enrolledCount: 3820,
+    instructor: 'Rajesh Subramanian (Principal Architect @ Bengaluru Tech Labs)',
+    description: 'Master core Java, object-oriented design principles (SOLID), exception handling, Collections Framework, multithreading, and RESTful service basics for software engineering careers.',
+    passMarkPercentage: 70,
+    modules: [
+      {
+        id: 'm10-1',
+        title: 'Java Core & Object-Oriented Principles (OOP)',
+        durationMinutes: 50,
+        content: `Java is an object-oriented, class-based, concurrent programming language.
+Key Pillars of OOP:
+1. Encapsulation: Bundling data (variables) and methods inside classes with private access modifiers and public getters/setters.
+2. Inheritance: Code reuse through 'extends', fostering a parent-child hierarchical relationship.
+3. Polymorphism: Method Overloading (compile-time) and Method Overriding (runtime).
+4. Abstraction: Hiding implementation details using abstract classes and interfaces.`,
+        keyTakeaways: [
+          'Understand JVM, JRE, and JDK architecture',
+          'Implement the 4 pillars of OOP in clean Java code',
+          'Use access modifiers to enforce data integrity'
+        ],
+        quiz: [
+          {
+            id: 'q10-1',
+            question: 'Which OOP concept is demonstrated by method overriding in Java subclasses?',
+            options: ['Runtime Polymorphism', 'Compile-time Polymorphism', 'Data Encapsulation', 'Multiple Inheritance'],
+            correctOptionIndex: 0,
+            explanation: 'Method overriding allows a subclass to provide a specific implementation of a method that is already defined in its superclass, resolved at runtime.'
+          }
+        ]
+      },
+      {
+        id: 'm10-2',
+        title: 'Java Collections Framework & Exception Handling',
+        durationMinutes: 55,
+        content: `Master the Java Collections Framework: List (ArrayList, LinkedList), Set (HashSet, TreeSet), and Map (HashMap, TreeMap).
+Understand unchecked RuntimeExceptions vs checked Exceptions, try-with-resources, and custom exception classes.`,
+        keyTakeaways: [
+          'Select optimal data structures: ArrayList vs LinkedList vs HashMap',
+          'Write robust error-handling code with try-catch-finally',
+          'Leverage Streams API and Lambdas for clean data processing'
+        ],
+        quiz: [
+          {
+            id: 'q10-2',
+            question: 'What is the average time complexity of get() and put() operations in a Java HashMap?',
+            options: ['O(1)', 'O(n)', 'O(log n)', 'O(n^2)'],
+            correctOptionIndex: 0,
+            explanation: 'HashMap provides amortized constant time O(1) performance for basic operations under good hash distribution.'
+          }
+        ]
+      }
+    ],
+    finalExam: [
+      {
+        id: 'fe-10-1',
+        question: 'Which interface in Java is used to order the objects of a user-defined class when multiple custom sorting criteria are needed?',
+        options: ['Comparator', 'Comparable', 'Serializable', 'Cloneable'],
+        correctOptionIndex: 0,
+        explanation: 'Comparator provides a compare() method to define multiple custom sorting sequences outside the class itself.'
+      }
+    ]
+  },
+  {
+    id: 'course-11',
+    title: 'Data Structures, Algorithms & Coding Practice for Placements',
+    category: 'Tech',
+    thumbnail: 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?auto=format&fit=crop&w=600&q=80',
+    durationHours: 18,
+    modulesCount: 2,
+    level: 'Advanced',
+    rating: 4.95,
+    enrolledCount: 5120,
+    instructor: 'Kavita Menon (Ex-Google, Competitive Programming Mentor)',
+    description: 'Cracking tech placement rounds with high-yield DSA: arrays, sliding window, two pointers, stacks, queues, binary trees, recursion, and dynamic programming.',
+    passMarkPercentage: 70,
+    modules: [
+      {
+        id: 'm11-1',
+        title: 'Arrays, Strings, Two-Pointer & Sliding Window Techniques',
+        durationMinutes: 60,
+        content: `Master the essential array patterns that appear in 70%+ of campus placement tests:
+1. Two Pointers: Left and Right pointers traversing inward (e.g. Pair Sum, Container with Most Water).
+2. Sliding Window: Maintaining a window of size k or variable size (e.g. Longest Substring Without Repeating Characters).
+3. Prefix Sum: Instant range queries in O(1) time after O(n) preprocessing.`,
+        keyTakeaways: [
+          'Recognize two-pointer and sliding window problem signatures',
+          'Optimize brute force O(n^2) solutions to optimal O(n)',
+          'Compute space and time complexity accurately'
+        ],
+        quiz: [
+          {
+            id: 'q11-1',
+            question: 'What is the optimal time complexity to find the maximum sum subarray of size K in an array of size N?',
+            options: ['O(N)', 'O(N * K)', 'O(N log N)', 'O(K^2)'],
+            correctOptionIndex: 0,
+            explanation: 'Using the sliding window technique, we add the incoming element and subtract the outgoing element in O(1) per step, yielding O(N) overall.'
+          }
+        ]
+      },
+      {
+        id: 'm11-2',
+        title: 'Trees, Graphs & Dynamic Programming (DP) Essentials',
+        durationMinutes: 65,
+        content: `Binary Tree traversals (Inorder, Preorder, Postorder, Level-Order/BFS).
+Binary Search Tree (BST) properties.
+Dynamic Programming: Overlapping subproblems + Optimal substructure.
+Memoization (Top-Down) vs Tabulation (Bottom-Up).`,
+        keyTakeaways: [
+          'Implement DFS and BFS graph/tree traversals',
+          'Solve classic 1D & 2D Dynamic Programming problems (0/1 Knapsack, Climbing Stairs)',
+          'Avoid stack overflow in recursive backtracking'
+        ],
+        quiz: [
+          {
+            id: 'q11-2',
+            question: 'Which traversal of a Binary Search Tree (BST) yields values in sorted ascending order?',
+            options: ['Inorder Traversal', 'Preorder Traversal', 'Postorder Traversal', 'Level-order Traversal'],
+            correctOptionIndex: 0,
+            explanation: 'Inorder traversal visits Left Subtree -> Root -> Right Subtree, which directly produces sorted order for any valid BST.'
+          }
+        ]
+      }
+    ],
+    finalExam: [
+      {
+        id: 'fe-11-1',
+        question: 'Which data structure is primarily used to implement Breadth-First Search (BFS) in trees and graphs?',
+        options: ['Queue (FIFO)', 'Stack (LIFO)', 'Priority Queue', 'Array List'],
+        correctOptionIndex: 0,
+        explanation: 'BFS processes nodes level by level using a First-In-First-Out Queue.'
+      }
+    ]
+  },
+  {
+    id: 'course-12',
+    title: 'Machine Learning, Deep Learning & Predictive Modeling',
+    category: 'Tech',
+    thumbnail: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=600&q=80',
+    durationHours: 16,
+    modulesCount: 2,
+    level: 'Intermediate',
+    rating: 4.88,
+    enrolledCount: 3410,
+    instructor: 'Dr. Alok Nath (AI Research Director & IEEE Senior Member)',
+    description: 'Hands-on practical machine learning using Python, Scikit-Learn, and PyTorch. Master supervised regression, classification, clustering, neural networks, and model deployment.',
+    passMarkPercentage: 70,
+    modules: [
+      {
+        id: 'm12-1',
+        title: 'Supervised Learning: Regression, Classification & Model Metrics',
+        durationMinutes: 55,
+        content: `Linear Regression, Logistic Regression, Decision Trees, and Random Forests.
+Overfitting vs Underfitting: Bias-Variance tradeoff.
+Evaluation Metrics: Accuracy, Precision, Recall, F1-Score, ROC-AUC curve.`,
+        keyTakeaways: [
+          'Clean, scale and split dataset using train_test_split',
+          'Train classifier models with scikit-learn',
+          'Interpret confusion matrices and precision-recall trade-offs'
+        ],
+        quiz: [
+          {
+            id: 'q12-1',
+            question: 'When evaluating a cancer diagnosis or fraud detection model where missing a positive case is costly, which metric should be prioritized?',
+            options: ['Recall (Sensitivity)', 'Precision', 'Overall Accuracy', 'Specificity'],
+            correctOptionIndex: 0,
+            explanation: 'High recall minimizes False Negatives, ensuring that actual positive cases (like fraud or disease) are not overlooked.'
+          }
+        ]
+      },
+      {
+        id: 'm12-2',
+        title: 'Neural Networks & Deep Learning Foundations',
+        durationMinutes: 60,
+        content: `Perceptrons, Multi-Layer Perceptrons (MLP), Activation Functions (ReLU, Softmax, Sigmoid), Backpropagation, Gradient Descent optimizers (Adam), and introductory Convolutional Neural Networks (CNNs).`,
+        keyTakeaways: [
+          'Understand forward propagation and backpropagation loss reduction',
+          'Prevent overfitting with Dropout, Early Stopping and Regularization',
+          'Build end-to-end classification pipelines'
+        ],
+        quiz: [
+          {
+            id: 'q12-2',
+            question: 'What is the primary role of an activation function like ReLU in a neural network?',
+            options: ['To introduce non-linearity so the network can learn complex patterns', 'To accelerate CPU clock frequency', 'To format weights into integers', 'To normalize memory usage'],
+            correctOptionIndex: 0,
+            explanation: 'Without non-linear activation functions, a multi-layer neural network collapses into a simple linear regression regardless of depth.'
+          }
+        ]
+      }
+    ],
+    finalExam: [
+      {
+        id: 'fe-12-1',
+        question: 'Which technique is commonly used to prevent overfitting during neural network training?',
+        options: ['Dropout', 'Increasing learning rate to 10', 'Removing the validation split', 'Adding 100 extra dense layers'],
+        correctOptionIndex: 0,
+        explanation: 'Dropout randomly deactivates a fraction of neurons during training to prevent co-adaptation of features.'
+      }
+    ]
   }
 ];
 

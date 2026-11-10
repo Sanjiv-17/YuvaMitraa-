@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { useApp } from '../../context/AppContext';
-import { reviewResumeWithATS } from '../../services/api';
+import { reviewResumeWithATS, uploadResumeApi } from '../../services/api';
 
 const RESUME_PRESETS = [
   {
@@ -112,10 +112,10 @@ Mumbai University | Aggregate: 82%`
 ];
 
 export const ResumeBuilder: React.FC = () => {
-  const { user, updateUser } = useApp();
+  const { user, updateUser, authToken, courses } = useApp();
 
   const [targetRole, setTargetRole] = useState('Frontend React Developer / Intern');
-  const [resumeText, setResumeText] = useState(user.resumeText || RESUME_PRESETS[0].text);
+  const [resumeText, setResumeText] = useState(user?.resumeText || RESUME_PRESETS[0].text);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [atsResult, setAtsResult] = useState<{
     atsScore: number;
@@ -145,11 +145,22 @@ export const ResumeBuilder: React.FC = () => {
     setUploadedFileName(`${file.name} (${Math.round(file.size / 1024)} KB)`);
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const content = e.target?.result as string;
       if (content) {
-        // If it's plain text or extracted content
-        setResumeText(prev => `${file.name.toUpperCase()} - UPLOADED EXTRACT:\n\n${content.slice(0, 3000)}`);
+        const fullContent = `${file.name.toUpperCase()} - UPLOADED EXTRACT:\n\n${content.slice(0, 4000)}`;
+        setResumeText(fullContent);
+        updateUser({
+          resumeFileName: file.name,
+          resumeText: fullContent
+        });
+        if (authToken) {
+          try {
+            await uploadResumeApi(authToken, file.name, fullContent);
+          } catch (err) {
+            console.warn('Sync resume upload err:', err);
+          }
+        }
       }
     };
     reader.readAsText(file);
@@ -168,10 +179,11 @@ export const ResumeBuilder: React.FC = () => {
     try {
       const data = await reviewResumeWithATS(resumeText, targetRole);
       setAtsResult(data);
+      const currentBadges = user?.badges || [];
       updateUser({
         resumeText,
-        xpPoints: user.xpPoints + 50,
-        badges: user.badges.includes('ATS Pro') ? user.badges : [...user.badges, 'ATS Pro']
+        xpPoints: (user?.xpPoints ?? 1250) + 50,
+        badges: currentBadges.includes('ATS Pro') ? currentBadges : [...currentBadges, 'ATS Pro']
       });
     } catch (err) {
       console.error('ATS evaluation error:', err);
@@ -187,8 +199,9 @@ export const ResumeBuilder: React.FC = () => {
       return `${prev}\n• Added Skill Keyword: ${kw}`;
     });
     // Also add to profile skills
-    if (!user.skills.includes(kw)) {
-      updateUser({ skills: [...user.skills, kw] });
+    const currentSkills = user?.skills || [];
+    if (!currentSkills.includes(kw)) {
+      updateUser({ skills: [...currentSkills, kw] });
     }
   };
 
@@ -576,6 +589,27 @@ export const ResumeBuilder: React.FC = () => {
                     </li>
                   ))}
                 </ul>
+              </div>
+
+              {/* Recommended Courses to Improve Eligibility */}
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-[#FF7A00]" />
+                  <span>Recommended Courses to Bridge Missing Skills:</span>
+                </h4>
+                <div className="space-y-2">
+                  {courses.slice(0, 2).map((crs) => (
+                    <div key={crs.id} className="p-2.5 rounded-xl bg-orange-50/70 border border-orange-200/80 flex items-center justify-between text-xs">
+                      <div>
+                        <p className="font-bold text-slate-800">{crs.title}</p>
+                        <p className="text-[10px] text-slate-500">{crs.modules.length} Modules • Certified</p>
+                      </div>
+                      <span className="text-[10px] font-bold text-[#FF7A00] bg-white px-2 py-0.5 rounded-md border border-orange-200">
+                        {crs.level}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
             </div>

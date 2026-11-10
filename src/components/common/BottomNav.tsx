@@ -6,11 +6,11 @@ export const BottomNav: React.FC<{ onOpenAssistant: () => void }> = ({ onOpenAss
   const { activeTab, setActiveTab, t } = useApp();
 
   const items = [
-    { id: 'home', label: t('home'), icon: Home },
-    { id: 'jobs', label: t('jobs'), icon: Briefcase },
-    { id: 'chat_trigger', label: 'AI Help', icon: Sparkles, isAction: true },
-    { id: 'courses', label: t('courses'), icon: BookOpen },
-    { id: 'profile', label: t('profile'), icon: User },
+    { id: 'home', label: 'Home', icon: Home },
+    { id: 'jobs', label: 'Internships', icon: Briefcase },
+    { id: 'courses', label: 'Learn', icon: BookOpen },
+    { id: 'assistant', label: 'AI Assistant', icon: Sparkles, isAction: true },
+    { id: 'profile', label: 'Profile', icon: User },
   ];
 
   return (

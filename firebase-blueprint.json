@@ -1,0 +1,108 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered YuvaMitraa user account and career profile",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Authenticated user Firebase UID"
+        },
+        "name": {
+          "type": "string",
+          "description": "Full name of the student or recruiter"
+        },
+        "email": {
+          "type": "string",
+          "description": "Verified email address"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Verified mobile phone number"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["student", "recruiter", "admin"],
+          "description": "User role on YuvaMitraa"
+        },
+        "college": {
+          "type": "string",
+          "description": "College or university institution"
+        },
+        "department": {
+          "type": "string",
+          "description": "Degree and specialization"
+        },
+        "location": {
+          "type": "string",
+          "description": "Current city or state in India"
+        },
+        "age": {
+          "type": "number",
+          "description": "User age in years"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of account registration"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last profile update"
+        }
+      },
+      "required": ["uid", "name", "role", "createdAt"]
+    },
+    "Job": {
+      "title": "Job",
+      "description": "Internship or entry-level job posting",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "company": { "type": "string" },
+        "location": { "type": "string" },
+        "city": { "type": "string" },
+        "stipend": { "type": "string" },
+        "type": { "type": "string" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "postedDate": { "type": "string" }
+      },
+      "required": ["id", "title", "company", "location"]
+    },
+    "Application": {
+      "title": "Application",
+      "description": "Student job application record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "jobId": { "type": "string" },
+        "userId": { "type": "string" },
+        "candidateName": { "type": "string" },
+        "candidateEmail": { "type": "string" },
+        "candidatePhone": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["Applied", "Shortlisted", "Interview", "Selected", "Rejected"]
+        },
+        "appliedDate": { "type": "string" }
+      },
+      "required": ["id", "jobId", "userId", "status", "appliedDate"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents indexed by user Firebase UID"
+    },
+    "/jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Verified job and internship listings"
+    },
+    "/applications/{applicationId}": {
+      "schema": "Application",
+      "description": "User internship applications"
+    }
+  }
+}

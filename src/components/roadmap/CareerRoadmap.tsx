@@ -72,9 +72,10 @@ export const CareerRoadmap: React.FC = () => {
         return prev.filter(p => p !== phaseNumber);
       } else {
         // Award XP
+        const currentBadges = user?.badges || [];
         updateUser({
-          xpPoints: user.xpPoints + 100,
-          badges: user.badges.includes('Roadmap Pioneer') ? user.badges : [...user.badges, 'Roadmap Pioneer']
+          xpPoints: (user?.xpPoints ?? 1250) + 100,
+          badges: currentBadges.includes('Roadmap Pioneer') ? currentBadges : [...currentBadges, 'Roadmap Pioneer']
         });
         return [...prev, phaseNumber];
       }
@@ -82,7 +83,8 @@ export const CareerRoadmap: React.FC = () => {
   };
 
   const handleAddSkillsToProfile = (skills: string[]) => {
-    const newSkills = Array.from(new Set([...user.skills, ...skills]));
+    const currentSkills = user?.skills || [];
+    const newSkills = Array.from(new Set([...currentSkills, ...skills]));
     updateUser({ skills: newSkills });
   };
 

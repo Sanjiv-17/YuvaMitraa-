@@ -99,10 +99,12 @@ export const DailyGoalCard: React.FC = () => {
         origin: { y: 0.7 }
       });
       // Award XP
+      const currentBadges = user?.badges || [];
+      const currentStreak = user?.streakDays ?? 5;
       updateUser({
-        xpPoints: user.xpPoints + 35,
-        streakDays: user.streakDays < 6 ? user.streakDays + 1 : user.streakDays,
-        badges: user.badges.includes('Daily Achiever') ? user.badges : [...user.badges, 'Daily Achiever']
+        xpPoints: (user?.xpPoints ?? 1250) + 35,
+        streakDays: currentStreak < 6 ? currentStreak + 1 : currentStreak,
+        badges: currentBadges.includes('Daily Achiever') ? currentBadges : [...currentBadges, 'Daily Achiever']
       });
     }
 
@@ -386,7 +388,7 @@ export const DailyGoalCard: React.FC = () => {
       <div className="mt-2 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
         <span className="flex items-center gap-1">
           <Flame className="w-3.5 h-3.5 text-[#FF7A00]" />
-          <span>Keep your <strong className="text-slate-800">{user.streakDays}-day streak</strong> active with daily practice.</span>
+          <span>Keep your <strong className="text-slate-800">{user?.streakDays ?? 5}-day streak</strong> active with daily practice.</span>
         </span>
         <button
           onClick={() => setActiveTab('roadmap')}

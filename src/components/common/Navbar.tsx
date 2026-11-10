@@ -15,7 +15,9 @@ import {
   ChevronDown,
   ShieldCheck,
   KeyRound,
-  RotateCcw
+  RotateCcw,
+  Smartphone,
+  Monitor
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Language } from '../../types';
@@ -33,7 +35,11 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
     notifications,
     markNotificationRead,
     setActiveTab,
-    activeTab
+    activeTab,
+    logout,
+    openAuthModal,
+    viewportMode,
+    toggleViewportMode
   } = useApp();
 
   const [showLangMenu, setShowLangMenu] = useState(false);
@@ -234,6 +240,29 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
             )}
           </div>
 
+          {/* Device Viewport Mode Switcher (Desktop vs Mobile Screen) */}
+          <button
+            onClick={toggleViewportMode}
+            className={`p-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold ${
+              viewportMode === 'mobile'
+                ? 'bg-orange-100 text-[#FF7A00] font-bold'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}
+            title={viewportMode === 'mobile' ? 'Switch to Full Desktop View' : 'Fix Screen to Mobile Screen Frame'}
+          >
+            {viewportMode === 'mobile' ? (
+              <>
+                <Smartphone className="w-4 h-4 text-[#FF7A00]" />
+                <span className="hidden md:inline">Mobile Screen</span>
+              </>
+            ) : (
+              <>
+                <Monitor className="w-4 h-4" />
+                <span className="hidden md:inline">Desktop</span>
+              </>
+            )}
+          </button>
+
           {/* Dark Mode Quick Toggle */}
           <button
             onClick={toggleDarkMode}
@@ -340,10 +369,10 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
 
                 <button
                   onClick={() => {
-                    useApp().openAuthModal('login');
+                    openAuthModal('login');
                     setShowUserMenu(false);
                   }}
-                  className="w-full px-3.5 py-2 text-left text-xs text-[#FF7A00] font-bold hover:bg-orange-50 flex items-center gap-2"
+                  className="w-full px-3.5 py-2 text-left text-xs text-[#FF7A00] font-bold hover:bg-orange-50 flex items-center gap-2 cursor-pointer"
                 >
                   <KeyRound className="w-3.5 h-3.5" />
                   <span>Switch Account / Sign In</span>
@@ -351,10 +380,10 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
 
                 <button
                   onClick={() => {
-                    useApp().logout();
+                    logout();
                     setShowUserMenu(false);
                   }}
-                  className="w-full px-3.5 py-2 text-left text-xs text-red-600 font-semibold hover:bg-red-50 flex items-center gap-2"
+                  className="w-full px-3.5 py-2 text-left text-xs text-red-600 font-semibold hover:bg-red-50 flex items-center gap-2 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Log Out</span>

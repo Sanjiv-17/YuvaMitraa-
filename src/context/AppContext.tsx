@@ -55,6 +55,10 @@ interface AppContextType {
   t: (key: string) => string;
   isFirstLaunch: boolean;
   dismissFirstLaunch: () => void;
+  // Viewport mode: desktop or mobile phone frame
+  viewportMode: 'desktop' | 'mobile';
+  setViewportMode: (mode: 'desktop' | 'mobile') => void;
+  toggleViewportMode: () => void;
   // Auth state & actions
   isAuthenticated: boolean;
   authToken: string | null;
@@ -126,10 +130,32 @@ const INITIAL_CERTIFICATES: Certificate[] = [
   }
 ];
 
+export function normalizeUserProfile(rawUser: any): UserProfile {
+  if (!rawUser) return INITIAL_USER;
+  return {
+    ...INITIAL_USER,
+    ...rawUser,
+    skills: Array.isArray(rawUser.skills) && rawUser.skills.length > 0 ? rawUser.skills : INITIAL_USER.skills,
+    interests: Array.isArray(rawUser.interests) && rawUser.interests.length > 0 ? rawUser.interests : INITIAL_USER.interests,
+    enrolledCourses: Array.isArray(rawUser.enrolledCourses) ? rawUser.enrolledCourses : INITIAL_USER.enrolledCourses,
+    savedJobIds: Array.isArray(rawUser.savedJobIds) ? rawUser.savedJobIds : (INITIAL_USER.savedJobIds || []),
+    badges: Array.isArray(rawUser.badges) && rawUser.badges.length > 0 ? rawUser.badges : INITIAL_USER.badges,
+    streakDays: typeof rawUser.streakDays === 'number' ? rawUser.streakDays : (INITIAL_USER.streakDays || 5),
+    xpPoints: typeof rawUser.xpPoints === 'number' ? rawUser.xpPoints : (INITIAL_USER.xpPoints || 1250),
+    location: rawUser.location || INITIAL_USER.location,
+    resumeFileName: rawUser.resumeFileName || INITIAL_USER.resumeFileName,
+    resumeText: rawUser.resumeText || INITIAL_USER.resumeText,
+  };
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('ym_user');
-    return saved ? JSON.parse(saved) : INITIAL_USER;
+    try {
+      const saved = localStorage.getItem('ym_user');
+      return saved ? normalizeUserProfile(JSON.parse(saved)) : INITIAL_USER;
+    } catch {
+      return INITIAL_USER;
+    }
   });
 
   const [language, setLanguageState] = useState<Language>(() => {
@@ -172,8 +198,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : { lat: 28.6315, lng: 77.2167 }; // New Delhi default
   });
 
+  // Viewport mode: desktop (full responsive) vs mobile (exact phone frame)
+  const [viewportMode, setViewportModeState] = useState<'desktop' | 'mobile'>(() => {
+    return (localStorage.getItem('ym_viewport_mode') as 'desktop' | 'mobile') || 'desktop';
+  });
+
+  const setViewportMode = (mode: 'desktop' | 'mobile') => {
+    setViewportModeState(mode);
+    localStorage.setItem('ym_viewport_mode', mode);
+  };
+
+  const toggleViewportMode = () => {
+    const next = viewportMode === 'desktop' ? 'mobile' : 'desktop';
+    setViewportMode(next);
+  };
+
   const [authToken, setAuthToken] = useState<string | null>(() => {
-    return localStorage.getItem('ym_auth_token') || 'token-demo-session';
+    return localStorage.getItem('ym_auth_token') || null;
   });
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
@@ -256,7 +297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isRecruiter]);
 
   const updateUser = (updated: Partial<UserProfile>) => {
-    setUser(prev => ({ ...prev, ...updated }));
+    setUser(prev => normalizeUserProfile({ ...prev, ...updated }));
   };
 
   const setLanguage = (lang: Language) => {
@@ -286,23 +327,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const login = (token: string, newUser: UserProfile) => {
+    const normalized = normalizeUserProfile(newUser);
     setAuthToken(token);
-    setUser(newUser);
+    setUser(normalized);
     localStorage.setItem('ym_auth_token', token);
-    localStorage.setItem('ym_user', JSON.stringify(newUser));
+    localStorage.setItem('ym_user', JSON.stringify(normalized));
     localStorage.setItem('ym_remembered_account', JSON.stringify({
-      name: newUser.name,
-      email: newUser.email,
-      phone: newUser.phone,
-      role: newUser.role,
-      photoUrl: newUser.photoUrl,
+      name: normalized.name,
+      email: normalized.email,
+      phone: normalized.phone,
+      role: normalized.role,
+      photoUrl: normalized.photoUrl,
     }));
     setIsAuthModalOpen(false);
 
     // Automatically redirect users to their respective dashboards
-    if (newUser.role === 'admin') {
+    if (normalized.role === 'admin') {
       setActiveTab('admin');
-    } else if (newUser.role === 'recruiter') {
+    } else if (normalized.role === 'recruiter') {
       setActiveTab('recruiter');
     } else {
       setActiveTab('home');
@@ -334,7 +376,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchCurrentUserApi(savedToken)
         .then(data => {
           if (data?.user) {
-            setUser(data.user);
+            setUser(normalizeUserProfile(data.user));
           }
         })
         .catch(() => {
@@ -549,6 +591,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         t,
         isFirstLaunch,
         dismissFirstLaunch,
+        viewportMode,
+        setViewportMode,
+        toggleViewportMode,
         isAuthenticated,
         authToken,
         login,

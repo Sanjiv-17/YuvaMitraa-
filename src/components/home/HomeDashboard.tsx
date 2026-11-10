@@ -37,15 +37,15 @@ export const HomeDashboard: React.FC = () => {
   } = useApp();
 
   // Top 3 jobs sorted by proximity or relevance
-  const nearbyJobs = jobs.slice(0, 3);
+  const nearbyJobs = (jobs || []).slice(0, 3);
 
   // In-progress courses
-  const enrolledCoursesList = courses.filter(c => 
-    user.enrolledCourses.some(e => e.courseId === c.id && !e.passed)
+  const enrolledCoursesList = (courses || []).filter(c => 
+    (user?.enrolledCourses || []).some(e => e.courseId === c.id && !e.passed)
   );
 
   // Active interview / shortlisted applications
-  const activeInterviews = applications.filter(a => a.status === 'Interview' || a.status === 'Shortlisted');
+  const activeInterviews = (applications || []).filter(a => a.status === 'Interview' || a.status === 'Shortlisted');
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
@@ -294,11 +294,11 @@ export const HomeDashboard: React.FC = () => {
               <h2 className="text-base font-bold text-slate-900">
                 Top Internship & Job Openings
               </h2>
-              <p className="text-xs text-slate-500">Sorted by proximity to {user.location.split(',')[0]}</p>
+              <p className="text-xs text-slate-500">Sorted by proximity to {(user?.location || 'New Delhi').split(',')[0]}</p>
             </div>
             <button
               onClick={() => setActiveTab('jobs')}
-              className="text-xs font-semibold text-[#FF7A00] hover:text-[#E06900] flex items-center gap-1"
+              className="text-xs font-semibold text-[#FF7A00] hover:text-[#E06900] flex items-center gap-1 cursor-pointer"
             >
               <span>View All ({jobs.length})</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -308,7 +308,7 @@ export const HomeDashboard: React.FC = () => {
           <div className="space-y-3">
             {nearbyJobs.map((job) => {
               const distance = calculateDistance(job.coordinates);
-              const isSaved = user.savedJobIds.includes(job.id);
+              const isSaved = (user?.savedJobIds || []).includes(job.id);
 
               return (
                 <div
