@@ -14,11 +14,14 @@ import {
   FileText,
   Share2,
   Bookmark,
-  Check
+  Check,
+  ExternalLink,
+  Globe
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Job, EligibilityResult } from '../../types';
 import { checkEligibility } from '../../services/api';
+import { openExternalUrl } from '../../utils/navigation';
 
 export const JobDetailModal: React.FC = () => {
   const { 
@@ -41,6 +44,7 @@ export const JobDetailModal: React.FC = () => {
     `Hello ${selectedJobForDetail?.company || 'Team'}, I am excited to apply for the ${selectedJobForDetail?.title} position. With my background in ${user?.education || 'relevant coursework'} and skills in ${(user?.skills || []).slice(0, 3).join(', ') || 'practical technologies'}, I am confident in adding real value to your projects.`
   );
   const [appliedSuccess, setAppliedSuccess] = useState(false);
+  const [applyErrorMessage, setApplyErrorMessage] = useState<string | null>(null);
 
   if (!selectedJobForDetail) return null;
 
@@ -60,9 +64,10 @@ export const JobDetailModal: React.FC = () => {
     }
   };
 
-  const handleApplySubmit = (e: React.FormEvent) => {
+  const handleApplySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const success = applyForJob(job, coverLetter, eligibilityResult?.matchScore || 85);
+    setApplyErrorMessage(null);
+    const success = await applyForJob(job, coverLetter, eligibilityResult?.matchScore || 85);
     if (success) {
       setAppliedSuccess(true);
       setTimeout(() => {
@@ -70,14 +75,14 @@ export const JobDetailModal: React.FC = () => {
         setIsApplying(false);
       }, 1500);
     } else {
-      alert('You have already applied for this position!');
+      setApplyErrorMessage('You have already applied for this position! Track its status under Applications.');
     }
   };
 
   const handleShareWhatsapp = () => {
     const text = `Check out this opening on YuvaMitraa: ${job.title} at ${job.company} (${job.stipend}). Location: ${job.location}`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalUrl(url);
   };
 
   return (
@@ -93,10 +98,23 @@ export const JobDetailModal: React.FC = () => {
               className="w-13 h-13 rounded-2xl object-cover border border-slate-200 shadow-xs"
             />
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base sm:text-lg font-bold text-slate-900">{job.title}</h2>
+                {job.isVerified ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>{job.verificationEvidence || 'Verified Genuine'}</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                    <Clock className="w-3.5 h-3.5" /> Verification Pending
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                  Source: {job.opportunitySource || 'Direct Employer'}
+                </span>
               </div>
-              <p className="text-xs font-semibold text-slate-600">{job.company}</p>
+              <p className="text-xs font-semibold text-slate-600 mt-0.5">{job.company}</p>
               <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
                 <span className="flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-slate-400" />
@@ -282,6 +300,29 @@ export const JobDetailModal: React.FC = () => {
             )}
           </div>
 
+          {/* Official Source Gateway Notice */}
+          {(job.originalUrl || job.externalSourceUrl) && (
+            <div className="p-3.5 rounded-2xl bg-sky-50 border border-sky-200 text-sky-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <Globe className="w-4 h-4 text-[#0284C7] shrink-0" />
+                <div>
+                  <span className="font-bold">Authentic External Portal: </span>
+                  <span>Directly sourced from {job.opportunitySource || 'Verified Portal'}.</span>
+                  {job.dateVerified && <span className="text-slate-500 text-[10px] block">Verified on {job.dateVerified}</span>}
+                </div>
+              </div>
+              <a
+                href={job.originalUrl || job.externalSourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-1.5 rounded-xl bg-[#0284C7] hover:bg-sky-600 text-white font-bold text-xs shrink-0 flex items-center gap-1 shadow-xs self-start sm:self-auto"
+              >
+                <span>Visit Official Portal</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
+
           {/* Job Overview & Responsibilities */}
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-slate-900">About the Role</h3>
@@ -355,6 +396,12 @@ export const JobDetailModal: React.FC = () => {
                 />
               </div>
 
+              {applyErrorMessage && (
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium">
+                  {applyErrorMessage}
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -387,18 +434,34 @@ export const JobDetailModal: React.FC = () => {
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
+        <div className="p-4 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-slate-500">
             Deadline: <span className="font-semibold text-slate-700">{job.deadline}</span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {(job.originalUrl || job.externalSourceUrl) && (
+              <a
+                href={job.originalUrl || job.externalSourceUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={async () => {
+                  // Auto-log external application in tracking state
+                  await applyForJob(job, 'Applied via official external portal redirect', eligibilityResult?.matchScore || 85);
+                }}
+                className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-md shadow-sky-600/20 transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <span>Apply on Official Portal</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+
             {!isApplying && (
               <button
                 onClick={() => setIsApplying(true)}
-                className="px-6 py-2.5 rounded-xl bg-[#FF7A00] hover:bg-[#E06900] text-white text-xs font-bold shadow-md shadow-orange-500/20 transition-all cursor-pointer flex items-center gap-2"
+                className="px-5 py-2.5 rounded-xl bg-[#FF7A00] hover:bg-[#E06900] text-white text-xs font-bold shadow-md shadow-orange-500/20 transition-all cursor-pointer flex items-center gap-2"
               >
-                <span>Apply for this Position</span>
+                <span>Quick Apply</span>
                 <Send className="w-3.5 h-3.5" />
               </button>
             )}

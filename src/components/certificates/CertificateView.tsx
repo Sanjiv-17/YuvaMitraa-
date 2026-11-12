@@ -15,6 +15,7 @@ import {
 import jsPDF from 'jspdf';
 import { useApp } from '../../context/AppContext';
 import { Certificate } from '../../types';
+import { openExternalUrl } from '../../utils/navigation';
 
 export const CertificateView: React.FC = () => {
   const { certificates, user, setActiveTab } = useApp();
@@ -137,7 +138,7 @@ export const CertificateView: React.FC = () => {
   const handleShareCertificate = (cert: Certificate) => {
     const text = `I just earned an official verified certificate in "${cert.courseTitle}" with ${cert.scorePercentage}% on YuvaMitraa! Verify Code: ${cert.certificateCode}`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalUrl(url);
   };
 
   return (

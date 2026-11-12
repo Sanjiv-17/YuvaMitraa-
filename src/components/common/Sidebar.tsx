@@ -26,7 +26,7 @@ interface NavItem {
 }
 
 export const Sidebar: React.FC = () => {
-  const { activeTab, setActiveTab, t, applications, certificates, isRecruiter, isAdmin } = useApp();
+  const { activeTab, setActiveTab, t, applications, certificates, isRecruiter, isCollege, isAdmin } = useApp();
 
   const navItems: NavItem[] = [
     { id: 'home', label: 'Home', icon: Home },
@@ -35,6 +35,10 @@ export const Sidebar: React.FC = () => {
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, ai: true },
     { id: 'profile', label: 'My Profile', icon: User },
   ];
+
+  if (isCollege) {
+    navItems.push({ id: 'college', label: 'College Portal', icon: Building2, badge: 'AISHE' });
+  }
 
   if (isAdmin) {
     navItems.push({ id: 'admin', label: 'Admin Dashboard', icon: Landmark, badge: 'Staff' });

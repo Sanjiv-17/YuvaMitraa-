@@ -31,6 +31,9 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
     darkMode, 
     toggleDarkMode, 
     isRecruiter, 
+    isCollege,
+    isAdmin,
+    switchRoleMode,
     toggleRecruiterMode,
     notifications,
     markNotificationRead,
@@ -117,6 +120,14 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span>Admin Center</span>
             </button>
+          ) : user.role === 'college' ? (
+            <button
+              onClick={() => setActiveTab('college')}
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition-all cursor-pointer"
+            >
+              <Building2 className="w-3.5 h-3.5 text-orange-600" />
+              <span>College Portal</span>
+            </button>
           ) : isRecruiter ? (
             <button
               onClick={() => setActiveTab('recruiter')}
@@ -127,12 +138,12 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
             </button>
           ) : (
             <button
-              onClick={toggleRecruiterMode}
-              title="Switch to Recruiter Mode"
+              onClick={() => setActiveTab('profile')}
+              title="Student Profile"
               className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all cursor-pointer"
             >
               <GraduationCap className="w-3.5 h-3.5" />
-              <span>Student Mode</span>
+              <span>Student Profile</span>
             </button>
           )}
 
@@ -330,18 +341,64 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                   </button>
                 )}
 
+                {user.role === 'college' && (
+                  <button
+                    onClick={() => {
+                      setActiveTab('college');
+                      setShowUserMenu(false);
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-orange-700 hover:bg-orange-50 flex items-center gap-2"
+                  >
+                    <Building2 className="w-3.5 h-3.5 text-orange-600" />
+                    <span>College Placement Portal</span>
+                  </button>
+                )}
+
                 {user.role === 'recruiter' && (
                   <button
                     onClick={() => {
                       setActiveTab('recruiter');
                       setShowUserMenu(false);
                     }}
-                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-2"
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-purple-700 hover:bg-purple-50 flex items-center gap-2"
                   >
                     <Building2 className="w-3.5 h-3.5 text-purple-600" />
                     <span>Recruiter Dashboard</span>
                   </button>
                 )}
+
+                {/* Quick Persona Switcher for Evaluation */}
+                <div className="px-3.5 py-2 bg-slate-50 border-y border-slate-100">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    View Perspective
+                  </span>
+                  <div className="grid grid-cols-2 gap-1 text-[11px] font-semibold">
+                    <button
+                      onClick={() => { switchRoleMode('student'); setShowUserMenu(false); }}
+                      className={`px-2 py-1 rounded text-left ${user.role === 'student' ? 'bg-emerald-600 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
+                    >
+                      🎓 Student
+                    </button>
+                    <button
+                      onClick={() => { switchRoleMode('college'); setShowUserMenu(false); }}
+                      className={`px-2 py-1 rounded text-left ${user.role === 'college' ? 'bg-orange-600 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
+                    >
+                      🏛️ College
+                    </button>
+                    <button
+                      onClick={() => { switchRoleMode('recruiter'); setShowUserMenu(false); }}
+                      className={`px-2 py-1 rounded text-left ${user.role === 'recruiter' ? 'bg-purple-600 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
+                    >
+                      🏢 Recruiter
+                    </button>
+                    <button
+                      onClick={() => { switchRoleMode('admin'); setShowUserMenu(false); }}
+                      className={`px-2 py-1 rounded text-left ${user.role === 'admin' ? 'bg-slate-900 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
+                    >
+                      🛡️ Admin
+                    </button>
+                  </div>
+                </div>
 
                 <button
                   onClick={() => {

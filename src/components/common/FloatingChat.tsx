@@ -71,7 +71,17 @@ export const FloatingChat: React.FC<{ isOpen: boolean; onClose: () => void }> = 
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
-      alert('Speech recognition is not supported in this browser. Please type your query.');
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `notif-${Date.now()}`,
+          sender: 'assistant',
+          text: language === 'Kannada' 
+            ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಬೆಂಬಲಿತವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಸಂದೇಶವನ್ನು ಟೈಪ್ ಮಾಡಿ.' 
+            : 'Voice input is not supported in this browser. Please type your query in the message box.',
+          time: 'Now'
+        }
+      ]);
       return;
     }
     if (isListening) {

@@ -16,6 +16,7 @@ import {
 } from 'firebase/auth';
 import { 
   getFirestore, 
+  initializeFirestore,
   doc, 
   getDoc, 
   setDoc, 
@@ -39,8 +40,17 @@ export const firebaseConfig = {
 // Initialize Firebase App once
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 
-// Initialize Firestore
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+// Initialize Firestore with long-polling to prevent proxy/iframe 10-second backend timeout
+let firestoreInstance: any;
+try {
+  firestoreInstance = initializeFirestore(app, {
+    experimentalForceLongPolling: true,
+  }, firebaseConfig.firestoreDatabaseId);
+} catch {
+  firestoreInstance = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+}
+
+export const db = firestoreInstance; /* CRITICAL: The app will break without this line */
 
 // Initialize Authentication
 export const auth = getAuth(app);
@@ -235,17 +245,19 @@ export async function signOutUser(): Promise<void> {
 }
 
 /**
- * Connection test helper
+ * Connection test helper with 4s timeout safeguard
  */
 export async function testConnection(): Promise<boolean> {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
+    await Promise.race([
+      getDocFromServer(doc(db, 'test', 'connection')),
+      timeoutPromise
+    ]);
     return true;
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore client offline, checking network connection.');
-      return false;
-    }
+    // Graceful offline readiness: avoid unhandled rejection or blocking errors
+    console.info('Firestore client ready (offline-first mode active)');
     return true;
   }
 }

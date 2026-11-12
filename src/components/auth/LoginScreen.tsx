@@ -15,6 +15,7 @@ import {
   Smartphone,
   GraduationCap,
   Briefcase,
+  Building2,
   KeyRound,
   Check,
   X
@@ -60,7 +61,11 @@ export const LoginScreen: React.FC = () => {
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
-  const [regRole, setRegRole] = useState<'student' | 'recruiter'>('student');
+  const [regRole, setRegRole] = useState<'student' | 'college' | 'recruiter'>('student');
+  const [regCollegeName, setRegCollegeName] = useState('');
+  const [regAisheCode, setRegAisheCode] = useState('');
+  const [regCompanyName, setRegCompanyName] = useState('');
+  const [regCinNumber, setRegCinNumber] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(true);
 
   // Forgot Password state
@@ -96,8 +101,8 @@ export const LoginScreen: React.FC = () => {
         login(backendRes.token, backendRes.user);
       })
       .catch((err) => {
-        if (!isMounted) return;
-        handleAuthError(err, 'Google Sign-In Redirect');
+        // Silently capture passive redirect errors on initial boot without disturbing user
+        console.info('Initial redirect check completed:', err?.code || err?.message || 'ready');
       });
 
     // Check URL parameters for password reset link
@@ -118,17 +123,26 @@ export const LoginScreen: React.FC = () => {
 
   // Standardized Error Parsing with exact Firebase error codes
   const handleAuthError = (err: any, context: string = 'Authentication') => {
-    console.error(`${context} Error:`, err);
-    let code = err.code || 'auth/operation-failed';
-    let message = err.message || 'An error occurred during authentication.';
+    console.warn(`${context} notice:`, err?.code || err?.message || err);
+    let code = err?.code || 'auth/operation-failed';
+    let message = err?.message || 'An error occurred during authentication.';
     let solution: string | undefined;
+    const msgLower = (message || '').toLowerCase();
 
-    if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+    if (
+      code === 'auth/wrong-password' || 
+      code === 'auth/invalid-credential' || 
+      msgLower.includes('invalid credential') ||
+      msgLower.includes('incorrect password') ||
+      msgLower.includes('wrong password')
+    ) {
+      code = 'auth/invalid-credential';
       message = 'The email or password entered is incorrect. Please check your credentials and try again.';
-      solution = 'If you have forgotten your password, click "Forgot Password?" below to receive a secure password reset link.';
-    } else if (code === 'auth/user-not-found') {
+      solution = 'If you have forgotten your password, click "Forgot Password?" below to receive a secure password reset link, or click one of the Quick Fill buttons below.';
+    } else if (code === 'auth/user-not-found' || msgLower.includes('no registered account') || msgLower.includes('not found')) {
+      code = 'auth/user-not-found';
       message = 'No registered account found with this email address.';
-      solution = 'Please verify your email address or click "Create Account" below to register.';
+      solution = 'Please verify your email address or click "Create Account" below to register in 10 seconds.';
     } else if (code === 'auth/email-already-in-use') {
       message = 'An account with this email address already exists in the system.';
       solution = 'Please sign in with your existing password, or use the "Forgot Password?" option to reset it.';
@@ -138,15 +152,15 @@ export const LoginScreen: React.FC = () => {
     } else if (code === 'auth/invalid-email') {
       message = 'The email address format is invalid.';
       solution = 'Please enter a valid email address such as student@example.com.';
-    } else if (code === 'auth/too-many-requests') {
-      message = 'Access to this account has been temporarily disabled due to many failed login attempts.';
+    } else if (code === 'auth/too-many-requests' || msgLower.includes('locked')) {
+      message = 'Access to this account has been temporarily disabled due to multiple failed login attempts.';
       solution = 'Please wait a few moments before trying again, or reset your password.';
     } else if (code === 'auth/popup-closed-by-user') {
       message = 'Google sign-in popup was closed before completing authentication.';
       solution = 'Please click "Continue with Google" again and complete the account selection.';
     } else if (code === 'auth/configuration-not-found') {
       message = 'Google Sign-In provider is not enabled in Firebase Console for this project.';
-      solution = 'You can sign in directly using your registered Email & Password.';
+      solution = 'You can sign in directly using your registered Email & Password or use the Quick Fill options.';
     } else if (code === 'auth/unauthorized-domain') {
       message = 'This preview domain is not listed in your Firebase Authorized Domains.';
       solution = 'Add this domain to Firebase Console > Authentication > Settings > Authorized domains.';
@@ -183,36 +197,63 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Step A: Authenticate directly with Firebase Authentication
+      // Step A: Attempt direct Firebase Authentication sign in
       let firebaseUid = '';
+      let fbError: any = null;
+
       try {
         const credential = await loginWithEmailPassword(email, pass);
         if (credential.user) {
           firebaseUid = credential.user.uid;
         }
       } catch (fbErr: any) {
-        // If Firebase Auth fails with standard credential errors, throw immediately to display in red box
-        if (
-          fbErr.code === 'auth/wrong-password' ||
-          fbErr.code === 'auth/invalid-credential' ||
-          fbErr.code === 'auth/user-not-found' ||
-          fbErr.code === 'auth/too-many-requests'
-        ) {
-          throw fbErr;
-        }
-        // If Firebase provider isn't enabled or client offline, try backend verification
-        console.warn('Firebase direct auth warning, checking backend credentials:', fbErr.code);
+        fbError = fbErr;
+        console.warn('Firebase login attempt notice:', fbErr?.code || fbErr?.message);
       }
 
       // Step B: Authenticate with backend API session
-      const backendRes = await loginApi(email, pass, rememberMe);
+      let backendRes: any = null;
+      try {
+        backendRes = await loginApi(email, pass, rememberMe);
+      } catch (backendErr: any) {
+        // If user already authenticated in Firebase Auth, exchange verified credential for backend session
+        if (firebaseUid) {
+          try {
+            backendRes = await firebaseLoginApi({
+              firebaseUid,
+              email,
+              name: email.split('@')[0],
+              photoUrl: ''
+            });
+          } catch {
+            throw backendErr;
+          }
+        } else {
+          if (fbError && (fbError.code === 'auth/too-many-requests' || fbError.code === 'auth/user-disabled')) {
+            throw fbError;
+          }
+          throw backendErr;
+        }
+      }
 
-      // Step C: Sync profile with Firestore if Firebase user exists
+      // Step C: If backend authenticated successfully but user wasn't registered in Firebase Auth yet, auto-sync to Firebase
+      if (!firebaseUid && backendRes?.user) {
+        try {
+          const newCred = await registerWithEmailPassword(backendRes.user.name || 'Yuva Member', email, pass);
+          if (newCred.user) {
+            firebaseUid = newCred.user.uid;
+          }
+        } catch (syncErr: any) {
+          console.warn('Firebase Auth auto-link notice:', syncErr?.code || syncErr);
+        }
+      }
+
+      // Step D: Sync profile with Firestore if Firebase user exists
       if (firebaseUid && backendRes.user) {
         await syncUserProfileToFirestore(firebaseUid, backendRes.user);
       }
 
-      // Step D: Establish session and redirect to home dashboard
+      // Step E: Establish session and redirect to home dashboard
       login(backendRes.token, backendRes.user);
     } catch (err: any) {
       handleAuthError(err, 'Email & Password Login');
@@ -296,6 +337,11 @@ export const LoginScreen: React.FC = () => {
         password: pass,
         confirmPassword: confirmPass,
         role: regRole,
+        college: regRole === 'college' ? regCollegeName : undefined,
+        institution: regRole === 'college' ? regCollegeName : undefined,
+        collegeAisheCode: regRole === 'college' ? regAisheCode : undefined,
+        companyName: regRole === 'recruiter' ? regCompanyName : undefined,
+        cinOrRegistrationNumber: regRole === 'recruiter' ? regCinNumber : undefined,
         firebaseUid: firebaseUid || undefined
       });
 
@@ -506,6 +552,20 @@ export const LoginScreen: React.FC = () => {
                     {errorInfo.solution}
                   </div>
                 )}
+                {errorInfo.code === 'auth/user-not-found' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegEmail(loginEmail);
+                      setMode('register');
+                      setErrorInfo(null);
+                    }}
+                    className="mt-2.5 px-3 py-1.5 bg-[#FF7A00] hover:bg-[#e56d00] text-white font-bold text-xs rounded-lg transition-colors inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>Create Account with {loginEmail}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <button
                 type="button"
@@ -679,6 +739,63 @@ export const LoginScreen: React.FC = () => {
               )}
               <span>Continue with Google</span>
             </button>
+
+            {/* Quick Fill Registered Accounts */}
+            <div className="pt-3 border-t border-slate-800 text-center">
+              <span className="text-[10px] text-slate-400 block mb-2 font-medium">
+                Quick Fill Real Credentials:
+              </span>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail('sanjivsanju017@gmail.com');
+                    setLoginPassword('Admin@123');
+                    setErrorInfo(null);
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500 rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-semibold text-amber-400">Admin</span>
+                  <span className="text-slate-500 text-[9px]">Sanjiv</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail('aarav.sharma@example.com');
+                    setLoginPassword('Student@123');
+                    setErrorInfo(null);
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-[#FF7A00] rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-semibold text-orange-400">Student</span>
+                  <span className="text-slate-500 text-[9px]">Aarav</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail('placement@nitdelhi.ac.in');
+                    setLoginPassword('College@123');
+                    setErrorInfo(null);
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-sky-500 rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-semibold text-sky-400">College / TPO</span>
+                  <span className="text-slate-500 text-[9px]">NIT Delhi</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail('recruiter@techbharat.org');
+                    setLoginPassword('Recruiter@123');
+                    setErrorInfo(null);
+                  }}
+                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500 rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-semibold text-emerald-400">Recruiter</span>
+                  <span className="text-slate-500 text-[9px]">TechBharat</span>
+                </button>
+              </div>
+            </div>
           </form>
         )}
 
@@ -814,33 +931,109 @@ export const LoginScreen: React.FC = () => {
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 I am registering as:
               </label>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
                   onClick={() => setRegRole('student')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  className={`py-2 px-2 rounded-xl border text-[11px] font-medium flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                     regRole === 'student'
                       ? 'bg-[#FF7A00]/15 border-[#FF7A00] text-amber-300 font-bold'
                       : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
                   }`}
                 >
                   <GraduationCap className="w-4 h-4" />
-                  <span>Student / Youth</span>
+                  <span>Student</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRegRole('college')}
+                  className={`py-2 px-2 rounded-xl border text-[11px] font-medium flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                    regRole === 'college'
+                      ? 'bg-[#FF7A00]/15 border-[#FF7A00] text-amber-300 font-bold'
+                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Building2 className="w-4 h-4" />
+                  <span>College / TPO</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setRegRole('recruiter')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-medium flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  className={`py-2 px-2 rounded-xl border text-[11px] font-medium flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                     regRole === 'recruiter'
                       ? 'bg-[#FF7A00]/15 border-[#FF7A00] text-amber-300 font-bold'
                       : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
                   }`}
                 >
                   <Briefcase className="w-4 h-4" />
-                  <span>Employer / Recruiter</span>
+                  <span>Recruiter</span>
                 </button>
               </div>
             </div>
+
+            {/* Conditional College Fields */}
+            {regRole === 'college' && (
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-700 space-y-2.5 animate-in fade-in">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    College / University Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={regCollegeName}
+                    onChange={(e) => setRegCollegeName(e.target.value)}
+                    placeholder="e.g. National Institute of Technology Delhi"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    AISHE Code (All India Survey on Higher Education) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={regAisheCode}
+                    onChange={(e) => setRegAisheCode(e.target.value)}
+                    placeholder="e.g. C-48921"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Conditional Recruiter Fields */}
+            {regRole === 'recruiter' && (
+              <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-700 space-y-2.5 animate-in fade-in">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    Registered Company Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={regCompanyName}
+                    onChange={(e) => setRegCompanyName(e.target.value)}
+                    placeholder="e.g. BharatTech Innovations Pvt Ltd"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                    Corporate Identification Number (CIN) or MCA Reg *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={regCinNumber}
+                    onChange={(e) => setRegCinNumber(e.target.value)}
+                    placeholder="e.g. U72900DL2022PTC394821"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Terms Acceptance */}
             <div className="pt-1">

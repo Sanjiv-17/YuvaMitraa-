@@ -6,7 +6,8 @@ import {
   Application, 
   Certificate, 
   Language, 
-  NotificationItem 
+  NotificationItem,
+  UserRole
 } from '../types';
 import { 
   INITIAL_USER, 
@@ -14,7 +15,18 @@ import {
   SAMPLE_COURSES, 
   UI_TRANSLATIONS 
 } from '../data/mockData';
-import { fetchCurrentUserApi, logoutApi } from '../services/api';
+import { 
+  fetchCurrentUserApi, 
+  logoutApi,
+  fetchOpportunitiesApi,
+  fetchApplicationsApi,
+  applyOpportunityApi,
+  updateApplicationStatusApi,
+  postOpportunityApi,
+  deleteOpportunityApi,
+  fetchNotificationsApi,
+  markNotificationReadApi
+} from '../services/api';
 
 interface AppContextType {
   user: UserProfile;
@@ -29,12 +41,12 @@ interface AppContextType {
   setSelectedCourseForPlayer: (course: Course | null) => void;
   courses: Course[];
   jobs: Job[];
-  addJob: (job: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>) => void;
+  addJob: (job: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>) => Promise<boolean>;
   updateJob: (jobId: string, updated: Partial<Job>) => void;
-  deleteJob: (jobId: string) => void;
+  deleteJob: (jobId: string) => Promise<void>;
   applications: Application[];
-  applyForJob: (job: Job, coverLetter: string, eligibilityScore?: number) => boolean;
-  updateApplicationStatus: (appId: string, status: Application['status']) => void;
+  applyForJob: (job: Job, coverLetter: string, eligibilityScore?: number) => Promise<boolean>;
+  updateApplicationStatus: (appId: string, status: Application['status'], details?: any) => Promise<void>;
   savedJobIds: string[];
   toggleSaveJob: (jobId: string) => void;
   certificates: Certificate[];
@@ -49,8 +61,10 @@ interface AppContextType {
   refreshUserLocation: () => Promise<boolean>;
   calculateDistance: (coords: { lat: number; lng: number }) => number;
   isRecruiter: boolean;
+  isCollege: boolean;
   isAdmin: boolean;
-  role: 'student' | 'recruiter' | 'admin';
+  role: UserRole;
+  switchRoleMode: (targetRole: UserRole) => void;
   toggleRecruiterMode: () => void;
   t: (key: string) => string;
   isFirstLaunch: boolean;
@@ -68,6 +82,8 @@ interface AppContextType {
   authModalMode: 'login' | 'register' | 'forgot';
   openAuthModal: (mode?: 'login' | 'register' | 'forgot') => void;
   closeAuthModal: () => void;
+  refreshOpportunities: () => Promise<void>;
+  refreshApplications: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -222,6 +238,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const isAuthenticated = Boolean(authToken && user);
   const isRecruiter = user.role === 'recruiter';
+  const isCollege = user.role === 'college';
   const isAdmin = user.role === 'admin';
   const role = user.role;
 
@@ -254,6 +271,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       actionTab: 'jobs'
     }
   ]);
+
+  // Load live opportunities from backend
+  const refreshOpportunities = async () => {
+    try {
+      const data = await fetchOpportunitiesApi();
+      if (Array.isArray(data?.opportunities) && data.opportunities.length > 0) {
+        setJobs(data.opportunities);
+      }
+    } catch (err) {
+      console.warn('Backend opportunities fetch skipped, using cached/mock:', err);
+    }
+  };
+
+  // Load live applications from backend
+  const refreshApplications = async () => {
+    try {
+      const data = await fetchApplicationsApi({ candidateEmail: user.email });
+      if (Array.isArray(data?.applications)) {
+        setApplications(data.applications);
+      }
+    } catch (err) {
+      console.warn('Backend applications fetch skipped, using cached/mock:', err);
+    }
+  };
+
+  // Load live notifications
+  const refreshNotifications = async () => {
+    try {
+      const data = await fetchNotificationsApi(authToken || undefined, user.role);
+      if (Array.isArray(data?.notifications) && data.notifications.length > 0) {
+        setNotifications(data.notifications);
+      }
+    } catch (err) {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    refreshOpportunities();
+    if (user?.email) {
+      refreshApplications();
+    }
+    refreshNotifications();
+  }, [user?.email, user?.role]);
 
   // Sync to local storage
   useEffect(() => {
@@ -292,10 +353,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (fontSize === 'xlarge') document.body.classList.add('font-xlarge');
   }, [fontSize]);
 
-  useEffect(() => {
-    localStorage.setItem('ym_is_recruiter', isRecruiter.toString());
-  }, [isRecruiter]);
-
   const updateUser = (updated: Partial<UserProfile>) => {
     setUser(prev => normalizeUserProfile({ ...prev, ...updated }));
   };
@@ -316,14 +373,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFontSizeState(size);
   };
 
-  const toggleRecruiterMode = () => {
-    const nextRole: 'student' | 'recruiter' = user.role === 'recruiter' ? 'student' : 'recruiter';
-    updateUser({ role: nextRole });
-    if (nextRole === 'recruiter') {
+  const switchRoleMode = (targetRole: UserRole) => {
+    updateUser({ role: targetRole });
+    if (targetRole === 'admin') {
+      setActiveTab('admin');
+    } else if (targetRole === 'recruiter') {
       setActiveTab('recruiter');
+    } else if (targetRole === 'college') {
+      setActiveTab('college');
     } else {
       setActiveTab('home');
     }
+  };
+
+  const toggleRecruiterMode = () => {
+    const nextRole: UserRole = user.role === 'recruiter' ? 'student' : 'recruiter';
+    switchRoleMode(nextRole);
   };
 
   const login = (token: string, newUser: UserProfile) => {
@@ -346,6 +411,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setActiveTab('admin');
     } else if (normalized.role === 'recruiter') {
       setActiveTab('recruiter');
+    } else if (normalized.role === 'college') {
+      setActiveTab('college');
     } else {
       setActiveTab('home');
     }
@@ -424,7 +491,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateUser({ savedJobIds: updated });
   };
 
-  const applyForJob = (job: Job, coverLetter: string, eligibilityScore?: number): boolean => {
+  const applyForJob = async (job: Job, coverLetter: string, eligibilityScore?: number): Promise<boolean> => {
     const exists = applications.some(app => app.jobId === job.id);
     if (exists) return false;
 
@@ -433,9 +500,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       jobId: job.id,
       jobTitle: job.title,
       company: job.company,
+      candidateId: user.id,
       candidateName: user.name,
       candidateEmail: user.email,
       candidatePhone: user.phone,
+      candidateCollege: user.college || user.institution,
+      candidateBranch: user.branch || user.course,
+      candidateGraduationYear: user.graduationYear,
       candidateSkills: user.skills,
       candidateResumeText: user.resumeText,
       status: 'Applied',
@@ -445,6 +516,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setApplications(prev => [newApp, ...prev]);
+
+    // Send to backend
+    try {
+      await applyOpportunityApi(authToken, {
+        jobId: job.id,
+        coverLetter,
+        matchScore: eligibilityScore || 80,
+        candidateEmail: user.email,
+        candidateName: user.name
+      });
+    } catch (err) {
+      console.warn('Backend apply call logged/fallback:', err);
+    }
 
     // Give XP and streak bonus
     updateUser({
@@ -469,13 +553,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const updateApplicationStatus = (appId: string, status: Application['status']) => {
+  const updateApplicationStatus = async (appId: string, status: Application['status'], details?: any) => {
     setApplications(prev =>
-      prev.map(app => (app.id === appId ? { ...app, status } : app))
+      prev.map(app => (app.id === appId ? { ...app, status, ...(details || {}) } : app))
     );
+
+    try {
+      await updateApplicationStatusApi(authToken, appId, {
+        status,
+        ...(details || {})
+      });
+    } catch (err) {
+      console.warn('Backend application status update logged/fallback:', err);
+    }
   };
 
-  const addJob = (jobData: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>) => {
+  const addJob = async (jobData: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>): Promise<boolean> => {
+    try {
+      const res = await postOpportunityApi(authToken, jobData);
+      if (res?.opportunity) {
+        setJobs(prev => [res.opportunity, ...prev]);
+        return true;
+      }
+    } catch (err) {
+      console.warn('Backend postOpportunity fallback:', err);
+    }
+
+    // Local fallback
     const newJob: Job = {
       ...jobData,
       id: `job-${Date.now()}`,
@@ -483,6 +587,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       applicantsCount: 0,
     };
     setJobs(prev => [newJob, ...prev]);
+    return true;
   };
 
   const updateJob = (jobId: string, updated: Partial<Job>) => {
@@ -491,8 +596,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const deleteJob = (jobId: string) => {
+  const deleteJob = async (jobId: string) => {
     setJobs(prev => prev.filter(job => job.id !== jobId));
+    try {
+      if (authToken) {
+        await deleteOpportunityApi(authToken, jobId);
+      }
+    } catch (err) {
+      console.warn('Backend delete job failed:', err);
+    }
   };
 
   const issueCertificate = (course: Course, scorePercentage: number): Certificate => {
@@ -543,6 +655,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, read: true } : n))
     );
+    markNotificationReadApi(id).catch(() => {});
   };
 
   const t = (key: string): string => {
@@ -585,8 +698,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshUserLocation,
         calculateDistance,
         isRecruiter,
+        isCollege,
         isAdmin,
         role,
+        switchRoleMode,
         toggleRecruiterMode,
         t,
         isFirstLaunch,
@@ -602,6 +717,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authModalMode,
         openAuthModal,
         closeAuthModal,
+        refreshOpportunities,
+        refreshApplications,
       }}
     >
       {children}

@@ -23,7 +23,7 @@
         },
         "role": {
           "type": "string",
-          "enum": ["student", "recruiter", "admin"],
+          "enum": ["student", "college", "recruiter", "admin"],
           "description": "User role on YuvaMitraa"
         },
         "college": {
@@ -33,6 +33,30 @@
         "department": {
           "type": "string",
           "description": "Degree and specialization"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Academic branch (e.g. Computer Science)"
+        },
+        "rollNumber": {
+          "type": "string",
+          "description": "Student roll or registration number"
+        },
+        "cgpa": {
+          "type": "number",
+          "description": "Cumulative GPA score out of 10"
+        },
+        "graduationYear": {
+          "type": "number",
+          "description": "Year of graduation"
+        },
+        "collegeAisheCode": {
+          "type": "string",
+          "description": "AISHE institutional accreditation code"
+        },
+        "cinOrRegistrationNumber": {
+          "type": "string",
+          "description": "Corporate CIN or official registration code"
         },
         "location": {
           "type": "string",
@@ -67,6 +91,10 @@
         "type": { "type": "string" },
         "category": { "type": "string" },
         "description": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "verificationStatus": { "type": "string" },
+        "opportunitySource": { "type": "string" },
+        "verificationEvidence": { "type": "string" },
         "postedDate": { "type": "string" }
       },
       "required": ["id", "title", "company", "location"]
@@ -82,13 +110,58 @@
         "candidateName": { "type": "string" },
         "candidateEmail": { "type": "string" },
         "candidatePhone": { "type": "string" },
+        "candidateCollege": { "type": "string" },
         "status": {
           "type": "string",
-          "enum": ["Applied", "Shortlisted", "Interview", "Selected", "Rejected"]
+          "enum": ["Applied", "Under Review", "Shortlisted", "Interview", "Selected", "Rejected"]
         },
         "appliedDate": { "type": "string" }
       },
       "required": ["id", "jobId", "userId", "status", "appliedDate"]
+    },
+    "Internship": {
+      "title": "Internship",
+      "description": "Genuine internship opportunity from AICTE and verified partners",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "companyName": { "type": "string" },
+        "description": { "type": "string" },
+        "eligibility": { "type": "string" },
+        "skills": { "type": "array" },
+        "location": { "type": "string" },
+        "workMode": { "type": "string", "enum": ["Remote", "On-site", "Hybrid"] },
+        "duration": { "type": "string" },
+        "stipend": { "type": "string" },
+        "applicationDeadline": { "type": "string" },
+        "applyUrl": { "type": "string" },
+        "sourceName": { "type": "string" },
+        "sourceUrl": { "type": "string" },
+        "sourceId": { "type": "string" },
+        "verifiedStatus": { "type": "string", "enum": ["Pending verification", "Verified", "Expired", "Rejected", "Unavailable"] },
+        "lastVerifiedAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "companyName", "applyUrl", "sourceName", "verifiedStatus"]
+    },
+    "DataSyncLog": {
+      "title": "DataSyncLog",
+      "description": "Synchronization audit log for external API adapters",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sourceName": { "type": "string" },
+        "lastSyncAt": { "type": "string" },
+        "status": { "type": "string", "enum": ["SUCCESS", "PARTIAL", "FAILED", "CONFIG_REQUIRED"] },
+        "fetchedCount": { "type": "number" },
+        "insertedCount": { "type": "number" },
+        "updatedCount": { "type": "number" },
+        "duplicateCount": { "type": "number" },
+        "errorMessage": { "type": "string" }
+      },
+      "required": ["sourceName", "lastSyncAt", "status", "fetchedCount"]
     }
   },
   "firestore": {
@@ -100,9 +173,17 @@
       "schema": "Job",
       "description": "Verified job and internship listings"
     },
+    "/internships/{internshipId}": {
+      "schema": "Internship",
+      "description": "Genuine internships from AICTE portal and authorized feeds"
+    },
     "/applications/{applicationId}": {
       "schema": "Application",
       "description": "User internship applications"
+    },
+    "/dataSyncLogs/{logId}": {
+      "schema": "DataSyncLog",
+      "description": "Integration synchronization logs"
     }
   }
 }

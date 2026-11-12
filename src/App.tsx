@@ -12,6 +12,7 @@ import { AIAssistantSection } from './components/assistant/AIAssistantSection';
 import { ProfilePage } from './components/profile/ProfilePage';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { RecruiterPortal } from './components/recruiter/RecruiterPortal';
+import { CollegePortal } from './components/college/CollegePortal';
 import { JobDetailModal } from './components/jobs/JobDetailModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { LoginScreen } from './components/auth/LoginScreen';
@@ -30,8 +31,8 @@ const MainScreenContent: React.FC = () => {
     const sub = activeTab === 'schemes' ? 'schemes' : (activeTab === 'applications' ? 'applications' : 'jobs');
     return <OpportunitiesSection key={`opp-${sub}`} initialSubTab={sub} />;
   }
-  if (activeTab === 'ai-assistant' || activeTab === 'assistant' || activeTab === 'resume' || activeTab === 'interview' || activeTab === 'roadmap') {
-    const sub = activeTab === 'resume' ? 'resume' : (activeTab === 'interview' ? 'interview' : (activeTab === 'roadmap' ? 'roadmap' : 'chat'));
+  if (activeTab === 'ai-assistant' || activeTab === 'assistant' || activeTab === 'resume' || activeTab === 'interview' || activeTab === 'roadmap' || activeTab === 'guidance' || activeTab === 'learning') {
+    const sub = activeTab === 'resume' ? 'resume' : (activeTab === 'interview' ? 'interview' : (activeTab === 'roadmap' ? 'roadmap' : (activeTab === 'guidance' ? 'guidance' : (activeTab === 'learning' ? 'learning' : 'chat'))));
     return <AIAssistantSection key={`ai-${sub}`} initialSubTab={sub} />;
   }
   if (activeTab === 'profile') {
@@ -42,6 +43,9 @@ const MainScreenContent: React.FC = () => {
   }
   if (activeTab === 'recruiter') {
     return <RecruiterPortal />;
+  }
+  if (activeTab === 'college') {
+    return <CollegePortal />;
   }
 
   return <HomeDashboard />;

@@ -31,7 +31,7 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'name', 'role', 'createdAt']) &&
         data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
         data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
-        data.role in ['student', 'recruiter', 'admin'];
+        data.role in ['student', 'college', 'recruiter', 'admin'];
     }
 
     // User profiles - private PII isolation: users can only read and write their own profile
@@ -43,10 +43,16 @@ service cloud.firestore {
       allow delete: if isOwner(userId) || isAdmin();
     }
 
-    // Jobs catalog - public read for signed-in users, write restricted to recruiters & admin
+    // Jobs catalog - public read for signed-in users, write restricted to recruiters, colleges & admin
     match /jobs/{jobId} {
       allow get, list: if isSignedIn();
-      allow create, update, delete: if isSignedIn() && (isAdmin() || request.auth.token.role == 'recruiter');
+      allow create, update, delete: if isSignedIn() && (isAdmin() || request.auth.token.role in ['recruiter', 'college']);
+    }
+
+    // Genuine Internships collection - public read for signed-in users, write restricted to admin & authorized adapters
+    match /internships/{internshipId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && (isAdmin() || request.auth.token.role in ['recruiter', 'college']);
     }
 
     // Job applications - candidate can read/create their own, admin and recruiter can read
@@ -56,6 +62,17 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
       allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // Data sync logs - readable by admin
+    match /dataSyncLogs/{logId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Health check connection test document
+    match /test/{testId} {
+      allow get: if true;
     }
   }
 }

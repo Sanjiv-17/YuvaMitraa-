@@ -86,6 +86,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-12-15',
     applicantsCount: 42,
     postedDate: '2 days ago',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'CIN Verified Employer (U72900DL2022PTC394821)',
+    opportunitySource: 'Direct Employer',
   },
   {
     id: 'job-2',
@@ -111,6 +115,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-11-30',
     applicantsCount: 68,
     postedDate: 'Just now',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'CIN Verified (U74300HR2021PTC095112)',
+    opportunitySource: 'Direct Employer',
   },
   {
     id: 'job-3',
@@ -136,6 +144,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-12-10',
     applicantsCount: 55,
     postedDate: '1 day ago',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'CIN Verified (U72200UP2020PTC128456)',
+    opportunitySource: 'Direct Employer',
   },
   {
     id: 'job-4',
@@ -161,6 +173,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-12-20',
     applicantsCount: 31,
     postedDate: '3 days ago',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'Verified Employer (U72900KA2019PTC112345)',
+    opportunitySource: 'Direct Employer',
   },
   {
     id: 'job-5',
@@ -186,6 +202,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-12-05',
     applicantsCount: 24,
     postedDate: '4 days ago',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'CIN Verified & ICAI Registered Partner',
+    opportunitySource: 'Direct Employer',
   },
   {
     id: 'job-6',
@@ -212,6 +232,10 @@ export const SAMPLE_JOBS: Job[] = [
     applicantsCount: 1420,
     postedDate: '5 days ago',
     isGovernmentSponsored: true,
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'National Career Service & Ministry of Corporate Affairs Scheme',
+    opportunitySource: 'National Career Service (NCS)',
   },
   {
     id: 'job-7',
@@ -237,6 +261,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-11-28',
     applicantsCount: 89,
     postedDate: '3 days ago',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'CIN Verified Startup Registry',
+    opportunitySource: 'Direct Employer',
   },
   {
     id: 'job-8',
@@ -262,6 +290,10 @@ export const SAMPLE_JOBS: Job[] = [
     deadline: '2026-12-18',
     applicantsCount: 63,
     postedDate: '2 days ago',
+    isVerified: true,
+    verificationStatus: 'approved',
+    verificationEvidence: 'College Placement Cell & AICTE Partner Drive',
+    opportunitySource: 'College Placement Cell',
   }
 ];
 

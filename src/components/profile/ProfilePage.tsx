@@ -27,14 +27,17 @@ import {
   Briefcase
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { openExternalUrl } from '../../utils/navigation';
 import { 
   uploadProfilePhotoApi, 
   uploadResumeApi, 
   updateProfileApi,
   changePasswordApi,
   logoutAllApi,
-  deleteAccountApi
+  deleteAccountApi,
+  saveStudentProjectApi
 } from '../../services/api';
+import { StudentProject } from '../../types';
 
 export const ProfilePage: React.FC = () => {
   const { user, updateUser, certificates, authToken, logout, applications, savedJobIds } = useApp();
@@ -43,18 +46,42 @@ export const ProfilePage: React.FC = () => {
   const [email, setEmail] = useState(user?.email || '');
   const [phone, setPhone] = useState(user?.phone || '');
   const [age, setAge] = useState<number | string>(user?.age ?? 21);
-  const [education, setEducation] = useState(user?.education || '');
-  const [institution, setInstitution] = useState(user?.institution || user?.college || '');
-  const [location, setLocation] = useState(user?.location || '');
+  const [education, setEducation] = useState(user?.education || 'Bachelor of Technology (B.Tech)');
+  const [institution, setInstitution] = useState(user?.institution || user?.college || 'National Institute of Technology Delhi');
+  const [branch, setBranch] = useState(user?.branch || 'Computer Science & Engineering');
+  const [rollNumber, setRollNumber] = useState(user?.rollNumber || '2023CSB1042');
+  const [cgpa, setCgpa] = useState(user?.cgpa || '8.8');
+  const [graduationYear, setGraduationYear] = useState(user?.graduationYear || '2026');
+  const [location, setLocation] = useState(user?.location || 'New Delhi, Delhi');
   const [skillsStr, setSkillsStr] = useState((user?.skills || []).join(', '));
   const [interestsStr, setInterestsStr] = useState((user?.interests || []).join(', '));
   const [preferredRolesStr, setPreferredRolesStr] = useState((user?.preferredRoles || ['Software Engineer', 'Frontend Developer']).join(', '));
   const [photoUrl, setPhotoUrl] = useState(user?.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80');
   const [resumeFileName, setResumeFileName] = useState(user?.resumeFileName || 'Resume.pdf');
   const [resumeText, setResumeText] = useState(user?.resumeText || '');
-  const [githubUrl, setGithubUrl] = useState('https://github.com/profile');
-  const [linkedinUrl, setLinkedinUrl] = useState('https://linkedin.com/in/profile');
-  const [portfolioUrl, setPortfolioUrl] = useState('https://portfolio.dev');
+  const [githubUrl, setGithubUrl] = useState(user?.githubUrl || 'https://github.com/profile');
+  const [linkedinUrl, setLinkedinUrl] = useState(user?.linkedinUrl || 'https://linkedin.com/in/profile');
+  const [portfolioUrl, setPortfolioUrl] = useState(user?.portfolioUrl || 'https://portfolio.dev');
+
+  // Projects state
+  const [projects, setProjects] = useState<StudentProject[]>(user?.projects || [
+    {
+      id: 'proj-1',
+      title: 'YuvaMitraa AI Career Bridge',
+      description: 'Built a full-stack platform connecting students with verified employers, smart ATS feedback, and placement monitoring.',
+      technologies: ['React', 'TypeScript', 'Tailwind CSS', 'Node.js'],
+      githubLink: 'https://github.com/aaravsharma/yuvamitraa-bridge',
+      liveLink: 'https://yuvamitraa.gov.in'
+    }
+  ]);
+  const [showAddProjectModal, setShowAddProjectModal] = useState(false);
+  const [newProject, setNewProject] = useState({
+    title: '',
+    description: '',
+    technologies: 'React, TypeScript, Node.js',
+    githubLink: '',
+    liveLink: ''
+  });
   
   // Status states
   const [isSaving, setIsSaving] = useState(false);
@@ -167,13 +194,21 @@ export const ProfilePage: React.FC = () => {
       education,
       institution,
       college: institution,
+      branch,
+      rollNumber,
+      cgpa,
+      graduationYear,
       location,
       photoUrl,
       resumeFileName,
       resumeText,
       skills: parsedSkills,
       interests: parsedInterests,
-      preferredRoles: parsedPreferredRoles
+      preferredRoles: parsedPreferredRoles,
+      projects,
+      githubUrl,
+      linkedinUrl,
+      portfolioUrl
     };
 
     updateUser(updatedData);
@@ -193,6 +228,29 @@ export const ProfilePage: React.FC = () => {
       setIsSaved(false);
       setSuccessNotice(null);
     }, 3000);
+  };
+
+  const handleSaveProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newProject.title.trim()) return;
+    const proj: StudentProject = {
+      id: `proj-${Date.now()}`,
+      title: newProject.title.trim(),
+      description: newProject.description.trim(),
+      technologies: newProject.technologies.split(',').map(t => t.trim()).filter(Boolean),
+      githubLink: newProject.githubLink.trim() || undefined,
+      liveLink: newProject.liveLink.trim() || undefined
+    };
+    const updated = [proj, ...projects];
+    setProjects(updated);
+    updateUser({ projects: updated });
+    if (authToken) {
+      saveStudentProjectApi(authToken, proj).catch(() => {});
+    }
+    setShowAddProjectModal(false);
+    setNewProject({ title: '', description: '', technologies: 'React, TypeScript', githubLink: '', liveLink: '' });
+    setSuccessNotice('Project added to your portfolio successfully!');
+    setTimeout(() => setSuccessNotice(null), 3000);
   };
 
   // Change password handler
@@ -265,13 +323,13 @@ export const ProfilePage: React.FC = () => {
   const handleShareOnWhatsApp = (certTitle: string, certCode: string) => {
     const text = `Check out my verified digital certificate in "${certTitle}" from YuvaMitraa National Youth Mission! Verification code: ${certCode}`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalUrl(url);
   };
 
   const handleShareOnLinkedIn = (certTitle: string) => {
     const text = `Proud to earn my verified certificate in ${certTitle} through YuvaMitraa! #SkillsForYouth #PMInternship`;
     const url = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent('https://yuvamitraa.gov.in')}&summary=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+    openExternalUrl(url);
   };
 
   return (
@@ -552,6 +610,54 @@ export const ProfilePage: React.FC = () => {
               />
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Branch / Major</label>
+                <input
+                  type="text"
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder="e.g. Computer Science & Engineering"
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Roll / Student ID</label>
+                <input
+                  type="text"
+                  value={rollNumber}
+                  onChange={(e) => setRollNumber(e.target.value)}
+                  placeholder="e.g. 2023CSB1042"
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Cumulative CGPA / %</label>
+                <input
+                  type="text"
+                  value={cgpa}
+                  onChange={(e) => setCgpa(e.target.value)}
+                  placeholder="e.g. 8.8 / 10"
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Graduation Year</label>
+                <input
+                  type="text"
+                  value={graduationYear}
+                  onChange={(e) => setGraduationYear(e.target.value)}
+                  placeholder="e.g. 2026"
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-mono"
+                />
+              </div>
+            </div>
+
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
                 Preferred Job & Internship Roles (comma-separated)
@@ -628,6 +734,143 @@ export const ProfilePage: React.FC = () => {
                 className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Projects Portfolio Section */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+            <div>
+              <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                <BookOpen className="w-4 h-4 text-[#FF7A00]" />
+                <span>Hands-on Engineering Projects ({projects.length})</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Showcase your technical builds, GitHub repos, and live deployed demonstrations to corporate recruiters.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAddProjectModal(true)}
+              className="px-3.5 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add Project</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {projects.map((proj) => (
+              <div
+                key={proj.id}
+                className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 space-y-2.5 hover:border-orange-300 transition-all"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <h4 className="font-bold text-sm text-slate-900 dark:text-white">{proj.title}</h4>
+                  <div className="flex items-center gap-1.5">
+                    {proj.githubLink && (
+                      <a
+                        href={proj.githubLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:text-black"
+                        title="GitHub Repo"
+                      >
+                        <Github className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                    {proj.liveLink && (
+                      <a
+                        href={proj.liveLink}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1 rounded-lg bg-orange-100 dark:bg-orange-950 text-orange-600 hover:text-orange-700"
+                        title="Live Demo"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {proj.description}
+                </p>
+
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {proj.technologies.map((t, idx) => (
+                    <span
+                      key={idx}
+                      className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* My Applications & Interview Schedule Tracker */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+            <div>
+              <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Briefcase className="w-4 h-4 text-[#0284C7]" />
+                <span>My Applications & Interview Schedule ({applications.length})</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Track status updates, recruiter screening reviews, and scheduled interview meetings in real-time.
+              </p>
+            </div>
+          </div>
+
+          <div className="divide-y divide-slate-100 dark:divide-slate-700">
+            {applications.length === 0 ? (
+              <p className="text-xs text-slate-400 italic py-4">No applications submitted yet. Browse opportunities to apply.</p>
+            ) : (
+              applications.map((app) => (
+                <div key={app.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white">{app.jobTitle}</h4>
+                      <span className="text-xs font-semibold text-slate-500">• {app.company}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      Applied on {app.appliedDate}
+                      {app.matchScore && <span> • Match Score: <strong className="text-emerald-600">{app.matchScore}%</strong></span>}
+                    </div>
+
+                    {app.interviewDate && (
+                      <div className="mt-2 p-2.5 rounded-xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 text-xs text-purple-900 dark:text-purple-200 flex items-center gap-2">
+                        <span>📅 <strong>Interview Scheduled:</strong> {app.interviewDate} at {app.interviewTime}</span>
+                        {app.interviewLinkOrVenue && (
+                          <a
+                            href={app.interviewLinkOrVenue}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-bold underline text-purple-700 dark:text-purple-300 ml-2"
+                          >
+                            Join Meeting Link →
+                          </a>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold self-start sm:self-auto ${
+                    app.status === 'Selected' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300' :
+                    app.status === 'Interview' ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300' :
+                    app.status === 'Shortlisted' ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300' :
+                    app.status === 'Rejected' ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300' :
+                    'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                  }`}>
+                    {app.status}
+                  </span>
+                </div>
+              ))
+            )}
           </div>
         </div>
 
@@ -883,6 +1126,103 @@ export const ProfilePage: React.FC = () => {
                 {deleteLoading ? 'Deleting...' : 'Delete My Account'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD PROJECT MODAL */}
+      {showAddProjectModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-orange-500" />
+                Add Hands-On Project
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowAddProjectModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 hover:text-slate-900"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveProject} className="space-y-3.5">
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Project Title *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Distributed Task Queue / E-Commerce Microservice"
+                  value={newProject.title}
+                  onChange={(e) => setNewProject({ ...newProject, title: e.target.value })}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Tech Stack (comma-separated)</label>
+                <input
+                  type="text"
+                  placeholder="React, TypeScript, Node.js, PostgreSQL"
+                  value={newProject.technologies}
+                  onChange={(e) => setNewProject({ ...newProject, technologies: e.target.value })}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">GitHub Repo Link</label>
+                  <input
+                    type="url"
+                    placeholder="https://github.com/..."
+                    value={newProject.githubLink}
+                    onChange={(e) => setNewProject({ ...newProject, githubLink: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Live URL / Demo Link</label>
+                  <input
+                    type="url"
+                    placeholder="https://demo.app"
+                    value={newProject.liveLink}
+                    onChange={(e) => setNewProject({ ...newProject, liveLink: e.target.value })}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Short Description & Highlights</label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="Describe architectural challenges solved, metrics, or core features..."
+                  value={newProject.description}
+                  onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                  className="w-full p-2.5 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAddProjectModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white rounded-xl shadow"
+                >
+                  Save to Profile
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

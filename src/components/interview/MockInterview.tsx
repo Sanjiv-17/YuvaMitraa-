@@ -28,7 +28,7 @@ const INTERVIEW_STAGES = [
 ];
 
 export const MockInterview: React.FC = () => {
-  const { user, updateUser } = useApp();
+  const { user, updateUser, language } = useApp();
 
   const roleOptions = [
     'Frontend React Developer',
@@ -38,6 +38,10 @@ export const MockInterview: React.FC = () => {
     'Customer Success Specialist',
     'Government Aptitude & General Knowledge'
   ];
+
+  const [interviewLanguage, setInterviewLanguage] = useState<'English' | 'Kannada'>(
+    language === 'Kannada' ? 'Kannada' : 'English'
+  );
 
   const initialQuestions: Record<string, Record<string, string>> = {
     'Frontend React Developer': {
@@ -72,9 +76,46 @@ export const MockInterview: React.FC = () => {
     }
   };
 
+  const initialQuestionsKannada: Record<string, Record<string, string>> = {
+    'Frontend React Developer': {
+      screening: 'ನಿಮ್ಮ ಬಗ್ಗೆ 1 ನಿಮಿಷದಲ್ಲಿ ಪರಿಚಯ ನೀಡಿ ಮತ್ತು ಫ್ರಂಟ್‌ಎಂಡ್‌ ರಿಯಾಕ್ಟ್ ಡೆವಲಪರ್ ಆಗಲು ನಿಮ್ಮ ಆಸಕ್ತಿ ಏನು?',
+      technical: 'ರಿಯಾಕ್ಟ್‌ನಲ್ಲಿ (React) ಸ್ಟೇಟ್ (State) ಮತ್ತು ಪ್ರಾಪ್ಸ್ (Props) ನಡುವಿನ ಪ್ರಮುಖ ವ್ಯತ್ಯಾಸವೇನು?',
+      behavioral: 'ಪ್ರಾಜೆಕ್ಟ್ ಡೆಡ್‌ಲೈನ್ ಸಮೀಪಿಸಿದಾಗ ನೀವು ಎದುರಿಸಿದ ತಾಂತ್ರಿಕ ಸವಾಲನ್ನು ಹೇಗೆ ಪರಿಹರಿಸಿದ್ದೀರಿ?'
+    },
+    'Python & AI Trainee': {
+      screening: 'ಪೈಥಾನ್ ಮತ್ತು ಕೃತಕ ಬುದ್ಧಿಮತ್ತೆ (AI) ಕಲಿಯಲು ನಿಮ್ಮ ಪ್ರೇರಣೆ ಏನು?',
+      technical: 'ಪೈಥಾನ್ ಪಾಂಡಾಸ್‌ನಲ್ಲಿ (Pandas) ಕಾಣೆಯಾದ ಡೇಟಾವನ್ನು (Missing data) ನೀವು ಹೇಗೆ ನಿಭಾಯಿಸುತ್ತೀರಿ?',
+      behavioral: 'ನಿರೀಕ್ಷಿತ ನಿಖರತೆ ಬರದಿದ್ದಾಗ ನಿಮ್ಮ AI ಮಾಡೆಲ್ ಅನ್ನು ಹೇಗೆ ಸುಧಾರಿಸಿದ್ದೀರಿ?'
+    },
+    'Digital Marketing Associate': {
+      screening: 'ಡಿಜಿಟಲ್ ಮಾರ್ಕೆಟಿಂಗ್‌ನಲ್ಲಿ ನಿಮ್ಮ ಅನುಭವ ಮತ್ತು ನೀವು ನಡೆಸಿದ ಯಶಸ್ವಿ ಕ್ಯಾಂಪೇನ್‌ಗಳ ಬಗ್ಗೆ ತಿಳಿಸಿ.',
+      technical: 'Instagram ಮತ್ತು Google Ads ನಲ್ಲಿ ROAS ಲೆಕ್ಕಾಚಾರವನ್ನು ಹೇಗೆ ಮಾಡುತ್ತೀರಿ?',
+      behavioral: 'ಕ್ಯಾಂಪೇನ್ ಫಲಿತಾಂಶ ತೃಪ್ತಿಕರವಾಗಿಲ್ಲದಿದ್ದಾಗ ನೀವು ತೆಗೆದುಕೊಂಡ ತಕ್ಷಣದ ಕ್ರಮವೇನು?'
+    },
+    'Financial Analyst & Tally': {
+      screening: 'ಕಾರ್ಪೊರೇಟ್ ಅಕೌಂಟಿಂಗ್ ಮತ್ತು ಹಣಕಾಸು ವಿಶ್ಲೇಷಣೆಯಲ್ಲಿ ನಿಮ್ಮ ಕರಿಯರ್ ಗುರಿಗಳೇನು?',
+      technical: 'ಅಕೌಂಟಿಂಗ್‌ನ ಮೂರು ಗೋಲ್ಡನ್ ರೂಲ್‌ಗಳನ್ನು (Golden Rules) ಉದಾಹರಣೆಯೊಂದಿಗೆ ವಿವರಿಸಿ.',
+      behavioral: 'ಲೆಕ್ಕ ಪರಿಶೋಧನೆಯಲ್ಲಿ ವ್ಯತ್ಯಾಸ ಕಂಡುಬಂದಾಗ ನೀವು ಅದನ್ನು ಹೇಗೆ ಸರಿಪಡಿಸಿದಿರಿ?'
+    },
+    'Customer Success Specialist': {
+      screening: 'ಗ್ರಾಹಕರೊಂದಿಗೆ ಉತ್ತಮ ಸಂಬಂಧ ಬೆಳೆಸಲು ನಿಮ್ಮ ಸಂವಹನ ಕೌಶಲ್ಯಗಳು ಹೇಗೆ ನೆರವಾಗುತ್ತವೆ?',
+      technical: 'ಗ್ರಾಹಕರ ತೃಪ್ತಿಯನ್ನು ಅಳೆಯಲು CSAT ಮತ್ತು NPS ಸ್ಕೋರ್‌ಗಳನ್ನು ಹೇಗೆ ಬಳಸುತ್ತೀರಿ?',
+      behavioral: 'ಗ್ರಾಹಕರು ತಾಂತ್ರಿಕ ದೋಷದಿಂದ ಕೋಪಗೊಂಡಾಗ ಅವರನ್ನು ಹೇಗೆ ಶಾಂತಗೊಳಿಸಿದಿರಿ?'
+    },
+    'Government Aptitude & General Knowledge': {
+      screening: 'ಭಾರತೀಯ ಸಾರ್ವಜನಿಕ ಸೇವೆಗಳು ಮತ್ತು ಆಡಳಿತ ಹುದ್ದೆಗಳಿಗೆ ಸೇರಲು ನಿಮ್ಮ ಪ್ರೇರಣೆ ಏನು?',
+      technical: 'ಸಂವಿಧಾನದ 19ನೇ ವಿಧಿಯ ಮೂಲಭೂತ ಹಕ್ಕುಗಳ ಮಹತ್ವವನ್ನು ಸಂಕ್ಷಿಪ್ತವಾಗಿ ತಿಳಿಸಿ.',
+      behavioral: 'ಸೀಮಿತ ಬಜೆಟ್‌ನಲ್ಲಿ ಸಾರ್ವಜನಿಕ ಕಲ್ಯಾಣ ಯೋಜನೆಗಳನ್ನು ನೀವು ಹೇಗೆ ಆದ್ಯತೆ ನೀಡುತ್ತೀರಿ?'
+    }
+  };
+
   const [selectedRole, setSelectedRole] = useState(roleOptions[0]);
   const [selectedStage, setSelectedStage] = useState('screening');
-  const [currentQuestion, setCurrentQuestion] = useState(initialQuestions[roleOptions[0]]['screening']);
+  const [currentQuestion, setCurrentQuestion] = useState(
+    language === 'Kannada' 
+      ? initialQuestionsKannada[roleOptions[0]]['screening'] 
+      : initialQuestions[roleOptions[0]]['screening']
+  );
   const [userAnswer, setUserAnswer] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -95,14 +136,15 @@ export const MockInterview: React.FC = () => {
 
   const recognitionRef = useRef<any>(null);
 
-  // Sync question when role or stage changes
+  // Sync question when role, stage or language changes
   useEffect(() => {
-    const q = initialQuestions[selectedRole]?.[selectedStage] || initialQuestions[roleOptions[0]]['screening'];
+    const qMap = interviewLanguage === 'Kannada' ? initialQuestionsKannada : initialQuestions;
+    const q = qMap[selectedRole]?.[selectedStage] || qMap[roleOptions[0]]['screening'];
     setCurrentQuestion(q);
     setUserAnswer('');
     setTimerSeconds(90);
     setIsTimerActive(false);
-  }, [selectedRole, selectedStage]);
+  }, [selectedRole, selectedStage, interviewLanguage]);
 
   // Timer countdown
   useEffect(() => {
@@ -122,7 +164,7 @@ export const MockInterview: React.FC = () => {
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = 'en-IN';
+      recognition.lang = interviewLanguage === 'Kannada' ? 'kn-IN' : 'en-IN';
 
       recognition.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
@@ -134,11 +176,15 @@ export const MockInterview: React.FC = () => {
       recognition.onend = () => setIsListening(false);
       recognitionRef.current = recognition;
     }
-  }, []);
+  }, [interviewLanguage]);
 
   const toggleListening = () => {
     if (!recognitionRef.current) {
-      alert('Voice recognition not available. Please type your response.');
+      if (!userAnswer) {
+        setUserAnswer(interviewLanguage === 'Kannada' 
+          ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಲಭ್ಯವಿಲ್ಲ - ದಯವಿಟ್ಟು ಇಲ್ಲಿ ನಿಮ್ಮ ಉತ್ತರವನ್ನು ಟೈಪ್ ಮಾಡಿ.' 
+          : 'Voice input is not supported in this browser. Please type your response here.');
+      }
       return;
     }
     if (isListening) {
@@ -164,6 +210,7 @@ export const MockInterview: React.FC = () => {
       }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = interviewLanguage === 'Kannada' ? 'kn-IN' : 'en-IN';
       utterance.rate = 1.0;
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
@@ -181,6 +228,7 @@ export const MockInterview: React.FC = () => {
       }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = interviewLanguage === 'Kannada' ? 'kn-IN' : 'en-IN';
       utterance.rate = 0.95;
       utterance.onend = () => setIsSpeakingModel(null);
       utterance.onerror = () => setIsSpeakingModel(null);
@@ -199,7 +247,8 @@ export const MockInterview: React.FC = () => {
         selectedRole,
         currentQuestion,
         userAnswer,
-        `${selectedStage}-q${questionCount}`
+        `${selectedStage}-q${questionCount}`,
+        interviewLanguage
       );
 
       const entry = {
@@ -251,18 +300,45 @@ export const MockInterview: React.FC = () => {
           </p>
         </div>
 
-        {/* Role Selector */}
-        <div className="flex items-center gap-2 self-start sm:self-auto">
-          <span className="text-xs font-bold text-slate-500">Target Role:</span>
-          <select
-            value={selectedRole}
-            onChange={(e) => setSelectedRole(e.target.value)}
-            className="py-2 px-3 text-xs font-bold bg-white border border-slate-200 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 shadow-xs cursor-pointer"
-          >
-            {roleOptions.map((r) => (
-              <option key={r} value={r}>{r}</option>
-            ))}
-          </select>
+        {/* Controls: Language & Role */}
+        <div className="flex items-center gap-3 self-start sm:self-auto flex-wrap">
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setInterviewLanguage('English')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                interviewLanguage === 'English'
+                  ? 'bg-white text-slate-900 shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              English
+            </button>
+            <button
+              type="button"
+              onClick={() => setInterviewLanguage('Kannada')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                interviewLanguage === 'Kannada'
+                  ? 'bg-[#FF7A00] text-white shadow-2xs'
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              ಕನ್ನಡ (Kannada)
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-500">Target Role:</span>
+            <select
+              value={selectedRole}
+              onChange={(e) => setSelectedRole(e.target.value)}
+              className="py-2 px-3 text-xs font-bold bg-white border border-slate-200 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 shadow-xs cursor-pointer"
+            >
+              {roleOptions.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

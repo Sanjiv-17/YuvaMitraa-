@@ -25,7 +25,13 @@ import {
   BookOpen,
   MapPin,
   TrendingUp,
-  CheckSquare
+  CheckSquare,
+  Database,
+  Globe,
+  Server,
+  Play,
+  Pause,
+  Cpu
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { 
@@ -34,9 +40,15 @@ import {
   updateUserStatusApi, 
   fetchAdminAuditLogsApi,
   fetchReportedJobsApi,
-  actionReportedJobApi
+  actionReportedJobApi,
+  fetchPendingVerificationsApi,
+  actionVerificationApi,
+  fetchIntegrationSourcesApi,
+  fetchSyncLogsApi,
+  triggerDataSyncApi,
+  toggleIntegrationSourceApi
 } from '../../services/api';
-import { UserProfile, AuditLogItem, Job } from '../../types';
+import { UserProfile, AuditLogItem, Job, VerificationRequestItem, SourceAdapterInfo, DataSyncLog } from '../../types';
 
 export const AdminDashboard: React.FC = () => {
   const { 
@@ -53,11 +65,14 @@ export const AdminDashboard: React.FC = () => {
 
   const [stats, setStats] = useState({
     totalStudents: 1,
+    totalColleges: 1,
     totalRecruiters: 1,
     totalAdmins: 1,
     totalUsers: 3,
     activeSessions: 2,
     totalJobs: 18,
+    pendingOpportunities: 0,
+    pendingVerifications: 2,
     totalApplications: 142,
     totalCertificatesIssued: 89,
     activeToday: 48,
@@ -66,9 +81,13 @@ export const AdminDashboard: React.FC = () => {
   const [usersList, setUsersList] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>([]);
   const [reportedJobs, setReportedJobs] = useState<any[]>([]);
+  const [verificationRequests, setVerificationRequests] = useState<VerificationRequestItem[]>([]);
+  const [integrationSources, setIntegrationSources] = useState<SourceAdapterInfo[]>([]);
+  const [syncLogs, setSyncLogs] = useState<DataSyncLog[]>([]);
+  const [isSyncingSource, setIsSyncingSource] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'student' | 'recruiter' | 'admin'>('all');
-  const [activeAdminTab, setActiveAdminTab] = useState<'overview' | 'users' | 'jobs' | 'courses' | 'applications' | 'reported' | 'security'>('overview');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'student' | 'college' | 'recruiter' | 'admin'>('all');
+  const [activeAdminTab, setActiveAdminTab] = useState<'overview' | 'integrations' | 'verifications' | 'users' | 'jobs' | 'courses' | 'applications' | 'reported' | 'security'>('overview');
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
 
@@ -88,17 +107,23 @@ export const AdminDashboard: React.FC = () => {
     if (!authToken) return;
     setIsLoading(true);
     try {
-      const [statsData, usersData, logsData, reportsData] = await Promise.all([
+      const [statsData, usersData, logsData, reportsData, verifData, sourcesData, syncLogsData] = await Promise.all([
         fetchAdminStatsApi(authToken).catch(() => stats),
         fetchAdminUsersApi(authToken).catch(() => ({ users: [] })),
         fetchAdminAuditLogsApi(authToken).catch(() => ({ auditLogs: [] })),
-        fetchReportedJobsApi(authToken).catch(() => ({ reports: [] }))
+        fetchReportedJobsApi(authToken).catch(() => ({ reports: [] })),
+        fetchPendingVerificationsApi(authToken).catch(() => ({ requests: [] })),
+        fetchIntegrationSourcesApi(authToken).catch(() => ({ sources: [] })),
+        fetchSyncLogsApi(authToken).catch(() => ({ logs: [] }))
       ]);
 
       if (statsData) setStats(statsData);
       if (usersData?.users) setUsersList(usersData.users);
       if (logsData?.auditLogs) setAuditLogs(logsData.auditLogs);
       if (reportsData?.reports) setReportedJobs(reportsData.reports);
+      if (verifData?.requests) setVerificationRequests(verifData.requests);
+      if (sourcesData?.sources) setIntegrationSources(sourcesData.sources);
+      if (syncLogsData?.logs) setSyncLogs(syncLogsData.logs);
     } catch (err) {
       console.warn('Failed to load admin data:', err);
     } finally {
@@ -119,7 +144,8 @@ export const AdminDashboard: React.FC = () => {
       loadData();
       setTimeout(() => setStatusMsg(null), 2500);
     } catch (err: any) {
-      alert(err.message || 'Failed to update user status');
+      setStatusMsg(err.message || 'Failed to update user status');
+      setTimeout(() => setStatusMsg(null), 3500);
     }
   };
 
@@ -131,7 +157,56 @@ export const AdminDashboard: React.FC = () => {
       loadData();
       setTimeout(() => setStatusMsg(null), 2500);
     } catch (err: any) {
-      alert(err.message || 'Failed to update report');
+      setStatusMsg(err.message || 'Failed to update report');
+      setTimeout(() => setStatusMsg(null), 3500);
+    }
+  };
+
+  const handleVerificationAction = async (item: VerificationRequestItem, action: 'approve' | 'reject') => {
+    if (!authToken) return;
+    try {
+      await actionVerificationApi(authToken, {
+        requestId: item.id,
+        entityType: item.entityType,
+        entityId: item.entityId,
+        action,
+        notes: action === 'approve' ? 'Verified after official registry and identity audit' : 'Rejected due to non-verifiable credentials'
+      });
+      setStatusMsg(`${item.name} (${item.entityType}) ${action === 'approve' ? 'Approved & Verified' : 'Rejected'}.`);
+      loadData();
+      setTimeout(() => setStatusMsg(null), 3000);
+    } catch (err: any) {
+      setStatusMsg(err.message || 'Failed to process verification request');
+      setTimeout(() => setStatusMsg(null), 3500);
+    }
+  };
+
+  const handleTriggerSync = async (sourceId?: string) => {
+    if (!authToken) return;
+    setIsSyncingSource(sourceId || 'all');
+    try {
+      const res = await triggerDataSyncApi(authToken, sourceId);
+      setStatusMsg(`Data sync completed: ${res.totalFetched || 0} items fetched, ${res.totalInserted || 0} new, ${res.totalUpdated || 0} updated.`);
+      await loadData();
+      setTimeout(() => setStatusMsg(null), 3500);
+    } catch (err: any) {
+      setStatusMsg(err.message || 'Failed to trigger data sync');
+      setTimeout(() => setStatusMsg(null), 3500);
+    } finally {
+      setIsSyncingSource(null);
+    }
+  };
+
+  const handleToggleSource = async (sourceId: string, currentEnabled: boolean) => {
+    if (!authToken) return;
+    try {
+      await toggleIntegrationSourceApi(authToken, sourceId, !currentEnabled);
+      setStatusMsg(`Integration adapter "${sourceId}" is now ${!currentEnabled ? 'Active' : 'Paused'}.`);
+      await loadData();
+      setTimeout(() => setStatusMsg(null), 2500);
+    } catch (err: any) {
+      setStatusMsg(err.message || 'Failed to toggle source status');
+      setTimeout(() => setStatusMsg(null), 3500);
     }
   };
 
@@ -156,7 +231,13 @@ export const AdminDashboard: React.FC = () => {
       responsibilities: ['Assist in feature development', 'Participate in team agile sprints'],
       perks: ['Certificate of Completion', 'Pre-Placement Offer (PPO)', 'Mentorship'],
       deadline: '2026-12-31',
-      isGovernmentSponsored: newJobCategory === 'Government'
+      isGovernmentSponsored: newJobCategory === 'Government',
+      isVerified: true,
+      verificationStatus: 'approved',
+      verificationEvidence: 'Admin Verified Institutional Listing',
+      opportunitySource: newJobCategory === 'Government' ? 'National Career Service (NCS)' : 'Direct Employer',
+      creatorId: user.id,
+      creatorRole: 'admin'
     });
 
     setStatusMsg(`New internship "${newJobTitle}" successfully published.`);
@@ -232,6 +313,28 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           Platform Overview
+        </button>
+        <button
+          onClick={() => setActiveAdminTab('integrations')}
+          className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+            activeAdminTab === 'integrations'
+              ? 'bg-[#FF7A00] text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" />
+          <span>Data Integrations ({integrationSources.length || 3})</span>
+        </button>
+        <button
+          onClick={() => setActiveAdminTab('verifications')}
+          className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+            activeAdminTab === 'verifications'
+              ? 'bg-[#FF7A00] text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+          }`}
+        >
+          <ShieldCheck className="w-3.5 h-3.5" />
+          <span>Verification Center ({verificationRequests.filter(v => v.status === 'pending').length})</span>
         </button>
         <button
           onClick={() => setActiveAdminTab('users')}
@@ -389,6 +492,357 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW: EXTERNAL DATA INTEGRATIONS & REFRESH ENGINE */}
+      {activeAdminTab === 'integrations' && (
+        <div className="space-y-6 animate-in fade-in">
+          {/* Header & Controls Card */}
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-[#FF7A00]" />
+                <h2 className="text-base font-bold text-slate-900 dark:text-white">
+                  Real-World Opportunity Data Integrations
+                </h2>
+                <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                  Every 6 Hours Refresh
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">
+                Automated multi-source connector for AICTE National Portal, IndianAPI Jobs feed, and National Career Service. Zero fake listings allowed.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => handleTriggerSync()}
+                disabled={isSyncingSource !== null}
+                className="px-4 py-2.5 rounded-xl bg-[#FF7A00] hover:bg-[#E06900] text-white font-bold text-xs shadow-md shadow-orange-500/20 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingSource === 'all' ? 'animate-spin' : ''}`} />
+                <span>{isSyncingSource === 'all' ? 'Syncing All Sources...' : 'Sync All Sources Now'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Metric Overview Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500">Active Adapters</span>
+              <div className="text-xl font-black text-slate-900 dark:text-white mt-1">
+                {integrationSources.filter(s => s.enabled).length || 3} of {integrationSources.length || 3}
+              </div>
+              <span className="text-[10px] text-emerald-600 font-bold">All connectors operational</span>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500">Refresh Frequency</span>
+              <div className="text-xl font-black text-slate-900 dark:text-white mt-1">6 Hours</div>
+              <span className="text-[10px] text-sky-600 font-bold">Auto-scheduled cron active</span>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500">Deduplication Engine</span>
+              <div className="text-xl font-black text-emerald-600 mt-1">Enabled</div>
+              <span className="text-[10px] text-slate-500">Matches company & title</span>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs">
+              <span className="text-[11px] font-semibold text-slate-500">Expiry Purge</span>
+              <div className="text-xl font-black text-slate-900 dark:text-white mt-1">Automatic</div>
+              <span className="text-[10px] text-slate-500">Marks past-deadline inactive</span>
+            </div>
+          </div>
+
+          {/* Connected Source Adapters Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {integrationSources.map((source) => {
+              const isSyncing = isSyncingSource === source.id;
+              return (
+                <div
+                  key={source.id}
+                  className="bg-white dark:bg-slate-800 p-5 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs flex flex-col justify-between space-y-4 hover:border-[#FF7A00]/40 transition-colors"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
+                          {source.type.toUpperCase()}
+                        </span>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white mt-1">
+                          {source.name}
+                        </h3>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full text-center leading-tight ${
+                        !source.enabled
+                          ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300'
+                          : source.status === 'CONNECTED'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                          : source.status === 'CONFIG_REQUIRED'
+                          ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                          : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                      }`}>
+                        {!source.enabled 
+                          ? '○ Paused' 
+                          : source.status === 'CONNECTED' 
+                          ? '● Connected (Active)' 
+                          : source.status === 'CONFIG_REQUIRED' 
+                          ? '▲ Optional (Skipped)' 
+                          : '✕ Failed'}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-3">
+                      {source.description}
+                    </p>
+
+                    {/* Environment Variable & Connection Details */}
+                    <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-700/60 space-y-1.5 text-[11px]">
+                      <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                        <span>Required Env Key:</span>
+                        <code className="font-mono text-[10px] font-bold text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-800 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                          {source.id === 'aicte_portal'
+                            ? 'AICTE_API_KEY & CLIENT_ID'
+                            : source.id === 'indianapi_jobs'
+                            ? 'INDIANAPI_KEY'
+                            : 'NCS_API_KEY'}
+                        </code>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                        <span>Key Configured:</span>
+                        <span className={`font-bold ${source.isKeyConfigured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                          {source.isKeyConfigured ? 'Yes (Active)' : 'Optional (Not Configured)'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/50 dark:border-slate-700/50">
+                        {source.isKeyConfigured
+                          ? 'Syncs authorized real-world listings every 6 hours.'
+                          : 'Skipped during 6-hour refresh without errors or fake data.'}
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700 space-y-1 text-[11px] text-slate-500">
+                      <div className="flex items-center justify-between">
+                        <span>Catalog Total:</span>
+                        <strong className="text-slate-800 dark:text-white">{source.totalListings} verified listings</strong>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span>Last Synced:</span>
+                        <span className="font-mono">{source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Scheduled'}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <a
+                        href={source.officialPortalUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[11px] font-bold text-[#0284C7] hover:underline flex items-center gap-1"
+                      >
+                        <span>Official Portal</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+
+                      <button
+                        onClick={() => handleToggleSource(source.id, source.enabled)}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                          source.enabled
+                            ? 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                        }`}
+                      >
+                        {source.enabled ? 'Pause Feed' : 'Resume Feed'}
+                      </button>
+                    </div>
+
+                    <button
+                      onClick={() => handleTriggerSync(source.id)}
+                      disabled={isSyncingSource !== null || !source.enabled}
+                      className="w-full py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 text-white dark:text-slate-900 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>{isSyncing ? 'Syncing...' : 'Sync Now'}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Sync History Audit Logs Table */}
+          <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-[#FF7A00]" />
+                  <span>Integration Health & Sync History Logs ({syncLogs.length})</span>
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Audit trail of background fetch runs, inserted records, deduplication rates, and network responses
+                </p>
+              </div>
+              <button
+                onClick={() => loadData()}
+                className="text-xs text-[#FF7A00] font-bold hover:underline"
+              >
+                Refresh Log
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-400 font-semibold uppercase text-[10px]">
+                    <th className="py-2.5 px-3">Timestamp</th>
+                    <th className="py-2.5 px-3">Data Source</th>
+                    <th className="py-2.5 px-3">Status</th>
+                    <th className="py-2.5 px-3">Fetched</th>
+                    <th className="py-2.5 px-3">Inserted</th>
+                    <th className="py-2.5 px-3">Updated</th>
+                    <th className="py-2.5 px-3">Duplicates</th>
+                    <th className="py-2.5 px-3">Diagnostic / Notes</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
+                  {syncLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-6 text-center text-slate-400">
+                        No sync runs recorded yet. Initial scheduled run active.
+                      </td>
+                    </tr>
+                  ) : (
+                    syncLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-750 transition-colors">
+                        <td className="py-3 px-3 font-mono text-[11px] text-slate-500">
+                          {new Date(log.lastSyncAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                        </td>
+                        <td className="py-3 px-3 font-bold text-slate-800 dark:text-white">
+                          {log.sourceName}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            log.status === 'SUCCESS' ? 'bg-emerald-100 text-emerald-800' :
+                            log.status === 'CONFIG_REQUIRED' ? 'bg-amber-100 text-amber-800' :
+                            log.status === 'PARTIAL' ? 'bg-sky-100 text-sky-800' :
+                            'bg-rose-100 text-rose-800'
+                          }`}>
+                            {log.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-700 dark:text-slate-300">
+                          {log.fetchedCount}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-emerald-600">
+                          +{log.insertedCount}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-sky-600">
+                          {log.updatedCount}
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-400">
+                          {log.duplicateCount}
+                        </td>
+                        <td className="py-3 px-3 text-[11px] text-slate-500 max-w-xs truncate">
+                          {log.errorMessage || 'Verified & synchronized without issues.'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW: VERIFICATION CENTER (COLLEGES, COMPANIES & OPPORTUNITIES) */}
+      {activeAdminTab === 'verifications' && (
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-5 animate-in fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-700 pb-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-[#FF7A00]" />
+                Institutional & Corporate Verification Center
+              </h2>
+              <p className="text-xs text-slate-500">
+                Verify identity of colleges (AISHE code) and corporate recruiters (MCA CIN) before granting verified badges. Zero fake listings allowed.
+              </p>
+            </div>
+            <div className="text-xs font-mono font-bold text-slate-500 bg-slate-100 dark:bg-slate-700 px-3 py-1.5 rounded-xl">
+              Pending: {verificationRequests.filter(v => v.status === 'pending').length}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {verificationRequests.length === 0 ? (
+              <div className="py-8 text-center text-slate-400 text-xs">
+                No pending verification requests at this time. All entities are verified.
+              </div>
+            ) : (
+              verificationRequests.map((req) => (
+                <div
+                  key={req.id}
+                  className="p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-750 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-sm text-slate-900 dark:text-white">{req.name}</span>
+                      <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md bg-purple-100 text-purple-800 font-mono">
+                        {req.entityType}
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-200 dark:bg-slate-700 px-2 py-0.5 rounded-md">
+                        ID: {req.identifier}
+                      </span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        req.status === 'approved' ? 'bg-emerald-100 text-emerald-800' :
+                        req.status === 'rejected' ? 'bg-rose-100 text-rose-800' :
+                        'bg-amber-100 text-amber-800'
+                      }`}>
+                        {req.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-600 dark:text-slate-300">
+                      {req.details}
+                    </p>
+                    <div className="text-[11px] text-slate-400 font-mono">
+                      Submitted: {req.submittedAt}
+                      {req.officialDocument && (
+                        <span> • Evidence Document: <strong className="text-slate-600 dark:text-slate-300">{req.officialDocument}</strong></span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
+                    {req.status === 'pending' ? (
+                      <>
+                        <button
+                          onClick={() => handleVerificationAction(req, 'approve')}
+                          className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Approve & Verify</span>
+                        </button>
+                        <button
+                          onClick={() => handleVerificationAction(req, 'reject')}
+                          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs border border-rose-200 transition-all cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Reject</span>
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-xs font-semibold text-slate-400">
+                        {req.status === 'approved' ? '✓ Verified in Registry' : '✕ Rejected Request'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

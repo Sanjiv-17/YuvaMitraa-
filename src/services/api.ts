@@ -36,12 +36,19 @@ export async function checkEligibility(job: Job, candidate: UserProfile): Promis
   }
 }
 
-export async function askStudyAssistant(
+export interface AIChatResponse {
+  reply: string;
+  suggestedQuestions?: string[];
+  language?: string;
+  relatedOpportunities?: string[];
+}
+
+export async function askStudyAssistantDetailed(
   message: string,
   history: { sender: string; text: string }[],
   language: string,
   userContext: Partial<UserProfile>
-): Promise<string> {
+): Promise<AIChatResponse> {
   try {
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
@@ -49,11 +56,63 @@ export async function askStudyAssistant(
       body: JSON.stringify({ message, history, language, userContext }),
     });
     if (!res.ok) throw new Error('Chat failed');
-    const data = await res.json();
-    return data.reply;
+    return await res.json();
   } catch (err) {
     console.warn('Study assistant chat fallback:', err);
-    return `Namaste! I am your YuvaMitraa AI Assistant. I can help you prepare for technical interviews, government exam strategies (UPSC/SSC), resume polish, and career roadmaps in ${language}. Ask me anything!`;
+    const isKannada = language === 'Kannada';
+    return {
+      reply: isKannada 
+        ? `ನಮಸ್ಕಾರ! 🙏 ನಾನು ನಿಮ್ಮ ಯುವಮಿತ್ರ (YuvaMitraa) ಎಐ ಕರಿಯರ್ ಮೆಂಟರ್. ಇಂಟರ್ನ್‌ಶಿಪ್‌ಗಳು, ರೆಸ್ಯೂಮೆ ಸುಧಾರಣೆ, ಮತ್ತು ಕರಿಯರ್ ಮಾರ್ಗದರ್ಶನಕ್ಕಾಗಿ ನಾನು ಸಿದ್ಧನಾಗಿದ್ದೇನೆ. ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ!`
+        : `Namaste! I am your YuvaMitraa AI Assistant. I can help you prepare for technical interviews, internship discovery, resume optimization, and career roadmaps in ${language}. Ask me anything!`,
+      suggestedQuestions: isKannada ? [
+        'ನನ್ನ ಪ್ರೊಫೈಲ್‌ಗೆ ಸೂಕ್ತವಾದ ಇಂಟರ್ನ್‌ಶಿಪ್‌ಗಳು ಯಾವುವು?',
+        'ರೆಸ್ಯೂಮೆ ATS ಸ್ಕೋರ್ ಹೆಚ್ಚಿಸಲು 5 ಸಲಹೆಗಳು ನೀಡಿ',
+        'ಟೆಕ್ನಿಕಲ್ ಇಂಟರ್ವ್ಯೂನಲ್ಲಿ ಸಾಮಾನ್ಯವಾಗಿ ಕೇಳುವ ಪ್ರಶ್ನೆಗಳು'
+      ] : [
+        'What internships match my profile?',
+        'How can I improve my resume ATS score?',
+        'Conduct a mock interview for me'
+      ]
+    };
+  }
+}
+
+export async function askStudyAssistant(
+  message: string,
+  history: { sender: string; text: string }[],
+  language: string,
+  userContext: Partial<UserProfile>
+): Promise<string> {
+  const result = await askStudyAssistantDetailed(message, history, language, userContext);
+  return result.reply;
+}
+
+export async function requestTtsAudio(text: string, language: string = 'English'): Promise<{ audioBase64?: string; useClientSynthesis?: boolean; format?: string }> {
+  try {
+    const res = await fetch('/api/ai/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, language }),
+    });
+    if (!res.ok) return { useClientSynthesis: true };
+    return await res.json();
+  } catch {
+    return { useClientSynthesis: true };
+  }
+}
+
+export async function transcribeAudioApi(audioBase64: string, mimeType: string = 'audio/webm', language: string = 'English'): Promise<string> {
+  try {
+    const res = await fetch('/api/ai/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ audioBase64, mimeType, language }),
+    });
+    if (!res.ok) throw new Error('Transcription failed');
+    const data = await res.json();
+    return data.text || '';
+  } catch {
+    return '';
   }
 }
 
@@ -89,12 +148,54 @@ export async function reviewResumeWithATS(resumeText: string, targetRole: string
   }
 }
 
-export async function practiceMockInterview(role: string, question: string, answer: string, stage: string) {
+export async function generateResumeFromProfile(userProfile: any, targetRole: string = 'Software Intern') {
+  try {
+    const res = await fetch('/api/ai/resume-generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userProfile, targetRole }),
+    });
+    if (!res.ok) throw new Error('Failed to generate resume');
+    return await res.json();
+  } catch (err) {
+    console.warn('Resume generation fallback:', err);
+    return {
+      headline: `${targetRole} Candidate`,
+      atsTips: [
+        'Use standard section headings: EDUCATION, TECHNICAL SKILLS, PROJECTS.',
+        'Include numbers in your bullet points to demonstrate quantifiable impact.'
+      ],
+      resumeText: `${userProfile?.name || 'Aarav Sharma'}\n${userProfile?.email || 'student@example.com'} | ${userProfile?.phone || '+91 98765 43210'}\n\nEDUCATION\n${userProfile?.college || 'Engineering College'} - ${userProfile?.branch || 'CSE'}\n\nSKILLS\n${(userProfile?.skills || ['JavaScript', 'React']).join(', ')}`
+    };
+  }
+}
+
+export async function enhanceResumeBullet(bulletPoint: string, targetRole: string = 'Software Intern') {
+  try {
+    const res = await fetch('/api/ai/resume-enhance', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bulletPoint, targetRole }),
+    });
+    if (!res.ok) throw new Error('Failed to enhance bullet');
+    return await res.json();
+  } catch (err) {
+    return {
+      enhancedBullets: [
+        `Engineered a responsive module for ${bulletPoint}, boosting performance by 30%.`,
+        `Architected and deployed ${bulletPoint} using clean code practices and Git version control.`,
+        `Collaborated with team to implement ${bulletPoint}, ensuring 100% mobile responsiveness.`
+      ]
+    };
+  }
+}
+
+export async function practiceMockInterview(role: string, question: string, answer: string, stage: string, language: string = 'English') {
   try {
     const res = await fetch('/api/ai/mock-interview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role, question, answer, stage }),
+      body: JSON.stringify({ role, question, answer, stage, language }),
     });
     if (!res.ok) throw new Error('Mock interview failed');
     return await res.json();
@@ -102,19 +203,41 @@ export async function practiceMockInterview(role: string, question: string, answ
     console.warn('Mock interview fallback:', err);
     return {
       score: 8,
+      scoreOutOf100: 82,
       feedback: 'Great clarity! You answered directly and conveyed your enthusiasm. Adding a concrete metric or specific hurdle you overcame will elevate this to an exemplary answer.',
+      strengths: ['Direct communication', 'Clear conceptual foundation'],
+      improvements: ['Include quantifiable metrics', 'Use the STAR method'],
       improvedAnswer: 'When working on this project, I noticed our team needed clearer module definitions. I documented our interfaces in Git, coordinated code reviews, and reduced integration bugs by 35%.',
       nextQuestion: 'Describe a scenario where you faced a tight project deadline. How did you prioritize tasks?'
     };
   }
 }
 
-export async function generateCareerRoadmap(careerGoal: string, currentLevel: string) {
+export async function generateInterviewQuestion(role: string, stage: string, questionNumber: number = 1, language: string = 'English') {
+  try {
+    const res = await fetch('/api/ai/interview-question', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, stage, questionNumber, language }),
+    });
+    if (!res.ok) throw new Error('Failed to fetch interview question');
+    return await res.json();
+  } catch {
+    return {
+      question: `Could you give a brief introduction of yourself and explain your interest in ${role}?`,
+      stage,
+      expectedKeyPoints: ['Background overview', 'Key skills', 'Genuine motivation'],
+      timeLimitSeconds: 90
+    };
+  }
+}
+
+export async function generateCareerRoadmap(careerGoal: string, currentLevel: string, language: string = 'English') {
   try {
     const res = await fetch('/api/ai/roadmap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ careerGoal, currentLevel }),
+      body: JSON.stringify({ careerGoal, currentLevel, language }),
     });
     if (!res.ok) throw new Error('Roadmap failed');
     return await res.json();
@@ -165,6 +288,50 @@ export async function generateCareerRoadmap(careerGoal: string, currentLevel: st
       ],
       topAdvice: 'Build publicly: commit your code to GitHub every day and share your progress on LinkedIn!'
     };
+  }
+}
+
+export async function generatePersonalizedLearningPlan(targetSkillOrRole: string, weeklyHours: number = 10, language: string = 'English', userSkills: string[] = []) {
+  try {
+    const res = await fetch('/api/ai/learning-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetSkillOrRole, weeklyHours, language, userSkills }),
+    });
+    if (!res.ok) throw new Error('Failed to generate learning plan');
+    return await res.json();
+  } catch (err) {
+    return {
+      planTitle: `${targetSkillOrRole} Accelerator Plan`,
+      weeklyCommitment: `${weeklyHours} Hours/Week`,
+      weeks: [
+        {
+          weekNumber: 1,
+          focusArea: 'Foundations & Tooling',
+          learningObjectives: ['Master basics and set up local dev environment', 'Start Git tracking'],
+          recommendedYuvaCourses: ['Core Fundamentals'],
+          handsOnTask: 'Complete 3 coding challenges',
+          hoursEstimate: weeklyHours
+        }
+      ],
+      capstoneProjectIdea: 'Portfolio Capstone Showcase',
+      successMetric: 'Earn YuvaMitraa skill certificate'
+    };
+  }
+}
+
+export async function fetchPersonalizedRecommendations(studentProfile: any) {
+  try {
+    const res = await fetch('/api/external/recommendations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentProfile }),
+    });
+    if (!res.ok) throw new Error('Recommendations request failed');
+    const data = await res.json();
+    return data.recommendations || [];
+  } catch {
+    return [];
   }
 }
 
@@ -234,6 +401,10 @@ export async function registerDirectApi(payload: {
   confirmPassword?: string;
   role?: string;
   college?: string;
+  institution?: string;
+  collegeAisheCode?: string;
+  companyName?: string;
+  cinOrRegistrationNumber?: string;
   course?: string;
   location?: string;
   firebaseUid?: string;
@@ -621,4 +792,312 @@ export async function actionReportedJobApi(token: string, id: string, action: 'r
   if (!res.ok) throw new Error('Failed to take action on reported job');
   return await res.json();
 }
+
+// ------------------------------------------
+// Real-World Ecosystem Client APIs
+// ------------------------------------------
+
+// 1. Opportunities APIs
+export async function fetchOpportunitiesApi(params?: { category?: string; type?: string; search?: string; collegeId?: string; creatorId?: string; showAll?: boolean }) {
+  const query = new URLSearchParams();
+  if (params?.category) query.set('category', params.category);
+  if (params?.type) query.set('type', params.type);
+  if (params?.search) query.set('search', params.search);
+  if (params?.collegeId) query.set('collegeId', params.collegeId);
+  if (params?.creatorId) query.set('creatorId', params.creatorId);
+  if (params?.showAll) query.set('showAll', 'true');
+
+  const res = await fetch(`/api/opportunities?${query.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch opportunities');
+  return data;
+}
+
+export async function postOpportunityApi(token: string | null, payload: any) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch('/api/opportunities', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to post opportunity');
+  return data;
+}
+
+export async function verifyOpportunityApi(token: string, jobId: string, action: 'approve' | 'reject', evidenceNotes?: string) {
+  const res = await fetch(`/api/opportunities/${jobId}/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ action, evidenceNotes })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to verify opportunity');
+  return data;
+}
+
+export async function deleteOpportunityApi(token: string, jobId: string) {
+  const res = await fetch(`/api/opportunities/${jobId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to delete opportunity');
+  return data;
+}
+
+// 2. Applications APIs
+export async function fetchApplicationsApi(params?: { candidateEmail?: string; jobId?: string; collegeName?: string; status?: string }) {
+  const query = new URLSearchParams();
+  if (params?.candidateEmail) query.set('candidateEmail', params.candidateEmail);
+  if (params?.jobId) query.set('jobId', params.jobId);
+  if (params?.collegeName) query.set('collegeName', params.collegeName);
+  if (params?.status) query.set('status', params.status);
+
+  const res = await fetch(`/api/applications?${query.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch applications');
+  return data;
+}
+
+export async function applyOpportunityApi(token: string | null, payload: { jobId: string; coverLetter?: string; matchScore?: number; candidateEmail?: string; candidateName?: string }) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch('/api/applications/apply', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to submit application');
+  return data;
+}
+
+export async function updateApplicationStatusApi(token: string | null, applicationId: string, payload: {
+  status?: string;
+  interviewDate?: string;
+  interviewTime?: string;
+  interviewMode?: string;
+  interviewLinkOrVenue?: string;
+  recruiterFeedback?: string;
+  notes?: string;
+}) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`/api/applications/${applicationId}/status`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to update application status');
+  return data;
+}
+
+// 3. Colleges APIs
+export async function fetchCollegesApi() {
+  const res = await fetch('/api/colleges');
+  const data = await res.json();
+  if (!res.ok) throw new Error('Failed to fetch colleges');
+  return data;
+}
+
+export async function registerCollegeApi(payload: any) {
+  const res = await fetch('/api/colleges/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to register college');
+  return data;
+}
+
+export async function fetchCollegeStudentsApi(collegeName?: string, collegeId?: string) {
+  const query = new URLSearchParams();
+  if (collegeName) query.set('collegeName', collegeName);
+  if (collegeId) query.set('collegeId', collegeId);
+
+  const res = await fetch(`/api/colleges/my-students?${query.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error('Failed to load college students');
+  return data;
+}
+
+export async function fetchCollegeAnalyticsApi(collegeName?: string) {
+  const query = new URLSearchParams();
+  if (collegeName) query.set('collegeName', collegeName);
+
+  const res = await fetch(`/api/colleges/analytics?${query.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error('Failed to load college analytics');
+  return data;
+}
+
+// 4. Companies APIs
+export async function fetchCompaniesApi() {
+  const res = await fetch('/api/companies');
+  const data = await res.json();
+  if (!res.ok) throw new Error('Failed to fetch companies');
+  return data;
+}
+
+// 5. Verification Center APIs (Admin)
+export async function fetchPendingVerificationsApi(token: string) {
+  const res = await fetch('/api/verification/pending', {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch pending verifications');
+  return data;
+}
+
+export async function actionVerificationApi(token: string, payload: {
+  requestId?: string;
+  entityType: 'college' | 'company' | 'opportunity';
+  entityId: string;
+  action: 'approve' | 'reject';
+  notes?: string;
+}) {
+  const res = await fetch('/api/verification/action', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to take action on verification request');
+  return data;
+}
+
+// 6. Notifications APIs
+export async function fetchNotificationsApi(token?: string, role?: string) {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const query = role ? `?role=${role}` : '';
+
+  const res = await fetch(`/api/notifications${query}`, { headers });
+  const data = await res.json();
+  if (!res.ok) throw new Error('Failed to fetch notifications');
+  return data;
+}
+
+export async function markNotificationReadApi(id: string) {
+  const res = await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
+  return await res.json();
+}
+
+// 7. Student Projects API
+export async function saveStudentProjectApi(token: string, project: { id?: string; title: string; description: string; technologies: string[]; liveLink?: string; githubLink?: string }) {
+  const res = await fetch('/api/user/project', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(project)
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to save project');
+  return data;
+}
+
+// ------------------------------------------
+// External Data Integration & Recommendation APIs
+// ------------------------------------------
+
+export async function fetchExternalInternshipsApi(params?: { search?: string; source?: string; workMode?: string; isGovernment?: boolean }) {
+  const query = new URLSearchParams();
+  if (params?.search) query.set('search', params.search);
+  if (params?.source) query.set('source', params.source);
+  if (params?.workMode) query.set('workMode', params.workMode);
+  if (params?.isGovernment !== undefined) query.set('isGovernment', String(params.isGovernment));
+
+  const res = await fetch(`/api/external/internships?${query.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch external internships');
+  return data;
+}
+
+export async function fetchExternalJobsApi(params?: { search?: string; location?: string; type?: string }) {
+  const query = new URLSearchParams();
+  if (params?.search) query.set('search', params.search);
+  if (params?.location) query.set('location', params.location);
+  if (params?.type) query.set('type', params.type);
+
+  const res = await fetch(`/api/external/jobs?${query.toString()}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch external jobs');
+  return data;
+}
+
+export async function fetchIntegrationSourcesApi(token?: string) {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch('/api/external/sources', { headers });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch integration sources');
+  return data;
+}
+
+export async function fetchSyncLogsApi(token?: string) {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch('/api/external/sync-logs', { headers });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch data sync logs');
+  return data;
+}
+
+export async function triggerDataSyncApi(token: string, sourceId?: string) {
+  const res = await fetch('/api/external/sync/trigger', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ sourceId })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to trigger data sync');
+  return data;
+}
+
+export async function toggleIntegrationSourceApi(token: string, sourceId: string, enabled: boolean) {
+  const res = await fetch(`/api/external/sources/${sourceId}/toggle`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ enabled })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to update integration source');
+  return data;
+}
+
+export async function fetchPersonalizedRecommendationsApi(studentProfile: any, limit: number = 6) {
+  const res = await fetch('/api/external/recommendations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ studentProfile, limit })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch personalized recommendations');
+  return data;
+}
+
+
 

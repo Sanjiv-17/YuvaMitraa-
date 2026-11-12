@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { useApp } from '../../context/AppContext';
-import { reviewResumeWithATS, uploadResumeApi } from '../../services/api';
+import { reviewResumeWithATS, uploadResumeApi, generateResumeFromProfile, enhanceResumeBullet } from '../../services/api';
 
 const RESUME_PRESETS = [
   {
@@ -132,12 +132,34 @@ export const ResumeBuilder: React.FC = () => {
   const [rawBullet, setRawBullet] = useState('');
   const [enhancedBullets, setEnhancedBullets] = useState<string[]>([]);
   const [isEnhancing, setIsEnhancing] = useState(false);
+  const [isGeneratingProfile, setIsGeneratingProfile] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   // File Upload states
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Generate complete resume from student profile
+  const handleGenerateFromProfile = async () => {
+    setIsGeneratingProfile(true);
+    try {
+      const data = await generateResumeFromProfile(user, targetRole);
+      if (data && data.resumeText) {
+        setResumeText(data.resumeText);
+        updateUser({ resumeText: data.resumeText });
+        const currentBadges = user?.badges || [];
+        updateUser({
+          xpPoints: (user?.xpPoints ?? 1250) + 100,
+          badges: currentBadges.includes('AI Resume Pioneer') ? currentBadges : [...currentBadges, 'AI Resume Pioneer']
+        });
+      }
+    } catch (err) {
+      console.error('Failed to generate resume from profile:', err);
+    } finally {
+      setIsGeneratingProfile(false);
+    }
+  };
 
   // File upload reader
   const handleFileUpload = (file: File) => {
@@ -194,7 +216,7 @@ export const ResumeBuilder: React.FC = () => {
 
   // 1-Click Insert Missing Keyword
   const handleAddKeywordToResume = (kw: string) => {
-    setResumeText(prev => {
+    setResumeText((prev: string) => {
       if (prev.includes(kw)) return prev;
       return `${prev}\n• Added Skill Keyword: ${kw}`;
     });
@@ -206,20 +228,32 @@ export const ResumeBuilder: React.FC = () => {
   };
 
   // AI Bullet Point Enhancer
-  const handleEnhanceBullet = () => {
-    if (!rawBullet.trim()) return;
+  const handleEnhanceBullet = async () => {
+    if (!rawBullet.trim() || isEnhancing) return;
     setIsEnhancing(true);
 
-    setTimeout(() => {
+    try {
+      const res = await enhanceResumeBullet(rawBullet, targetRole);
+      if (res && Array.isArray(res.enhancedBullets) && res.enhancedBullets.length > 0) {
+        setEnhancedBullets(res.enhancedBullets);
+      } else {
+        const clean = rawBullet.trim().replace(/^[-•*]\s*/, '');
+        setEnhancedBullets([
+          `Spearheaded the development of ${clean}, driving a 34% increase in user efficiency and optimizing overall delivery timelines.`,
+          `Architected and deployed ${clean} leveraging modern best practices, reducing latency by 28% and ensuring high scalability.`,
+          `Engineered ${clean} with robust error handling and automated unit testing, boosting system uptime to 99.8% across 1,000+ student sessions.`
+        ]);
+      }
+    } catch {
       const clean = rawBullet.trim().replace(/^[-•*]\s*/, '');
-      const suggestions = [
+      setEnhancedBullets([
         `Spearheaded the development of ${clean}, driving a 34% increase in user efficiency and optimizing overall delivery timelines.`,
         `Architected and deployed ${clean} leveraging modern best practices, reducing latency by 28% and ensuring high scalability.`,
         `Engineered ${clean} with robust error handling and automated unit testing, boosting system uptime to 99.8% across 1,000+ student sessions.`
-      ];
-      setEnhancedBullets(suggestions);
+      ]);
+    } finally {
       setIsEnhancing(false);
-    }, 600);
+    }
   };
 
   const handleCopyBullet = (text: string, index: number) => {
@@ -229,7 +263,7 @@ export const ResumeBuilder: React.FC = () => {
   };
 
   const handleInsertBulletToResume = (text: string) => {
-    setResumeText(prev => `${prev}\n• ${text}`);
+    setResumeText((prev: string) => `${prev}\n• ${text}`);
   };
 
   const handleDownloadResumePDF = () => {
@@ -275,7 +309,21 @@ export const ResumeBuilder: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 self-start sm:self-auto">
+        <div className="flex items-center gap-2.5 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={handleGenerateFromProfile}
+            disabled={isGeneratingProfile}
+            className="px-4 py-2.5 rounded-xl bg-orange-50 border border-orange-200 hover:bg-orange-100 text-[#FF7A00] font-bold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer transition-colors disabled:opacity-50"
+            title="Auto-generate an ATS-optimized resume using your verified student profile"
+          >
+            {isGeneratingProfile ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[#FF7A00]" />
+            ) : (
+              <Wand2 className="w-4 h-4 text-[#FF7A00]" />
+            )}
+            <span>{isGeneratingProfile ? 'Generating with Gemini...' : 'Generate from Profile'}</span>
+          </button>
+
           <button
             onClick={() => fileInputRef.current?.click()}
             className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition-colors"
@@ -598,7 +646,7 @@ export const ResumeBuilder: React.FC = () => {
                   <span>Recommended Courses to Bridge Missing Skills:</span>
                 </h4>
                 <div className="space-y-2">
-                  {courses.slice(0, 2).map((crs) => (
+                  {courses.slice(0, 2).map((crs: any) => (
                     <div key={crs.id} className="p-2.5 rounded-xl bg-orange-50/70 border border-orange-200/80 flex items-center justify-between text-xs">
                       <div>
                         <p className="font-bold text-slate-800">{crs.title}</p>
