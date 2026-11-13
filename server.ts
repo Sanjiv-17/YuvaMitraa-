@@ -1,9 +1,12 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import { initializeApp as initFirebaseAdminApp, getApps as getFirebaseAdminApps, cert } from 'firebase-admin/app';
+import { getAuth as getFirebaseAdminAuth } from 'firebase-admin/auth';
 import { GoogleGenAI, Type } from '@google/genai';
 import { SyncEngine } from './src/services/dataIntegration/SyncEngine';
 import { InternshipListing, JobListing } from './src/types/index';
@@ -12,6 +15,127 @@ dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const AUTHORIZED_ADMIN_EMAIL = 'sanjivsanju017@gmail.com';
+let cfgProjectId = '';
+try {
+  const cfgPath = path.resolve(__dirname, 'firebase-applet-config.json');
+  if (fs.existsSync(cfgPath)) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    if (cfg.projectId) cfgProjectId = cfg.projectId;
+  }
+} catch {
+  // fallback to default project id
+}
+const firebaseProjectId =
+  process.env.VITE_FIREBASE_PROJECT_ID ||
+  process.env.FIREBASE_PROJECT_ID ||
+  cfgProjectId ||
+  'euphoric-blueprint-f7cdj';
+const allowedProjectIds = Array.from(
+  new Set([
+    process.env.VITE_FIREBASE_PROJECT_ID,
+    process.env.FIREBASE_PROJECT_ID,
+    cfgProjectId,
+    firebaseProjectId,
+  ].filter(Boolean) as string[])
+);
+
+try {
+  if (getFirebaseAdminApps().length === 0) {
+    const serviceAccountRaw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    if (serviceAccountRaw) {
+      initFirebaseAdminApp({
+        credential: cert(JSON.parse(serviceAccountRaw)),
+        projectId: firebaseProjectId,
+      });
+    } else {
+      initFirebaseAdminApp({
+        projectId: firebaseProjectId,
+      });
+    }
+  }
+} catch (adminInitErr: any) {
+  console.warn('[FirebaseAdmin] Initialization notice:', adminInitErr?.message || adminInitErr);
+}
+
+let cachedGoogleCerts: { certs: Record<string, string>; expiresAt: number } | null = null;
+
+async function getGooglePublicCerts(): Promise<Record<string, string>> {
+  if (cachedGoogleCerts && Date.now() < cachedGoogleCerts.expiresAt) {
+    return cachedGoogleCerts.certs;
+  }
+  const resp = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+  if (!resp.ok) {
+    throw new Error('Failed to fetch Firebase public certificates.');
+  }
+  const cacheControl = resp.headers.get('cache-control') || '';
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAgeMs = maxAgeMatch ? Number(maxAgeMatch[1]) * 1000 : 3600 * 1000;
+  const certs = (await resp.json()) as Record<string, string>;
+  cachedGoogleCerts = { certs, expiresAt: Date.now() + maxAgeMs };
+  return certs;
+}
+
+async function verifyFirebaseIdToken(idToken: string): Promise<Record<string, any>> {
+  if (!idToken || typeof idToken !== 'string') {
+    throw new Error('Missing Firebase ID token.');
+  }
+  try {
+    return await getFirebaseAdminAuth().verifyIdToken(idToken);
+  } catch (adminErr: any) {
+    const code = adminErr?.code || '';
+    const msg = String(adminErr?.message || '');
+    // Only fall back to direct Google public X.509 signature verification when Admin SDK lacks local credentials/ADC
+    const isCredentialOrConfigErr =
+      code === 'app/no-credential' ||
+      msg.includes('Could not load the default credentials') ||
+      msg.includes('Failed to determine project ID') ||
+      msg.includes('ENOTFOUND') ||
+      msg.includes('metadata');
+    if (!isCredentialOrConfigErr && code.startsWith('auth/')) {
+      throw adminErr;
+    }
+
+    const parts = idToken.split('.');
+    if (parts.length !== 3) {
+      throw new Error('Invalid Firebase ID token format.');
+    }
+    const [headerB64, payloadB64, sigB64] = parts;
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    if (header.alg !== 'RS256' || !header.kid) {
+      throw new Error('Invalid Firebase token header.');
+    }
+    const certs = await getGooglePublicCerts();
+    const cert = certs[header.kid];
+    if (!cert) {
+      throw new Error('Firebase token signing key not recognized.');
+    }
+    const verifier = crypto.createVerify('RSA-SHA256');
+    verifier.update(`${headerB64}.${payloadB64}`);
+    verifier.end();
+    const isValidSig = verifier.verify(cert, Buffer.from(sigB64, 'base64url'));
+    if (!isValidSig) {
+      throw new Error('Invalid Firebase ID token signature.');
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (!allowedProjectIds.includes(payload.aud)) {
+      throw new Error('Firebase token audience mismatch.');
+    }
+    const expectedIssuers = allowedProjectIds.map(id => `https://securetoken.google.com/${id}`);
+    if (!expectedIssuers.includes(payload.iss)) {
+      throw new Error('Firebase token issuer mismatch.');
+    }
+    if (!payload.sub || typeof payload.sub !== 'string') {
+      throw new Error('Firebase token subject missing.');
+    }
+    if (typeof payload.exp !== 'number' || payload.exp <= nowSec) {
+      throw new Error('Firebase ID token has expired.');
+    }
+    return { ...payload, uid: payload.sub };
+  }
+}
 
 // Initialize Automatic Data Integration Sync Engine (6-hour refresh cycle by default)
 const syncIntervalHours = Number(process.env.SYNC_INTERVAL || process.env.SYNC_INTERVAL_HOURS) || 6;
@@ -172,7 +296,9 @@ interface UserRecord {
   name: string;
   email: string;
   phone: string;
-  role: 'student' | 'college' | 'recruiter' | 'admin';
+  role: 'student' | 'recruiter' | 'experienced' | 'college' | 'admin';
+  currentRole?: string;
+  yearsOfExperience?: string;
   passwordHash: string;
   passwordSalt: string;
   college?: string;
@@ -220,177 +346,8 @@ interface UserRecord {
   xpPoints?: number;
 }
 
-// Seed Users with hashed passwords
-const studentHashed = hashPassword('Student@123');
-const collegeHashed = hashPassword('College@123');
-const recruiterHashed = hashPassword('Recruiter@123');
-const adminHashed = hashPassword('Admin@123');
-
-const usersDatabase: UserRecord[] = [
-  {
-    id: 'usr-student-1',
-    name: 'Aarav Sharma',
-    email: 'aarav.sharma@example.com',
-    phone: '9876543210',
-    role: 'student',
-    passwordHash: studentHashed.hash,
-    passwordSalt: studentHashed.salt,
-    college: 'National Institute of Technology Delhi',
-    collegeId: 'col-1',
-    branch: 'Computer Science & Engineering',
-    course: 'B.Tech in Computer Science & Engineering',
-    studyYear: '3rd Year',
-    rollNumber: '221CS042',
-    cgpa: '8.7',
-    graduationYear: '2026',
-    education: 'B.Tech in Computer Science & Engineering (3rd Year)',
-    institution: 'National Institute of Technology Delhi',
-    isVerified: true,
-    verificationStatus: 'verified',
-    verificationEvidence: 'College Roll Number & Academic Record Verified',
-    status: 'active',
-    createdAt: '2026-01-15T10:00:00Z',
-    lastLoginAt: '2026-11-06T18:00:00Z',
-    photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-    skills: ['JavaScript', 'HTML5', 'CSS3', 'React', 'Python Basics', 'Git', 'Problem Solving', 'Public Speaking'],
-    interests: ['Frontend Web Development', 'AI Tools', 'Startups', 'Fintech', 'Youth Leadership'],
-    projects: [
-      {
-        id: 'proj-1',
-        title: 'YuvaPortal - Campus Notes & Exam Hub',
-        description: 'Collaborative resource-sharing web app for 600+ university classmates with offline caching and quick search.',
-        technologies: ['React', 'Tailwind CSS', 'TypeScript', 'IndexedDB'],
-        liveLink: 'https://yuvaportal-demo.app',
-        githubLink: 'https://github.com/aarav-dev/yuvaportal'
-      },
-      {
-        id: 'proj-2',
-        title: 'Smart Campus Event Notifier',
-        description: 'Event board for technical societies with email reminders and RSVP analytics.',
-        technologies: ['Node.js', 'Express', 'React', 'REST APIs'],
-        githubLink: 'https://github.com/aarav-dev/campus-events'
-      }
-    ],
-    githubUrl: 'https://github.com/aarav-dev',
-    linkedinUrl: 'https://linkedin.com/in/aarav-sharma-tech',
-    location: 'Connaught Place, New Delhi',
-    resumeFileName: 'Aarav_Sharma_Resume_2026.pdf',
-    resumeText: 'AARAV SHARMA\nEmail: aarav.sharma@example.com | Phone: +91 98765 43210\nB.Tech Computer Science & Engineering, NIT Delhi (CGPA: 8.7/10)\nSkills: React, JavaScript, TypeScript, Python, Git, Tailwind CSS, REST APIs\nProjects: YuvaPortal, Smart Campus Notifier\nCertifications: Business Communication & Technical Presentation',
-    enrolledCourses: [
-      { courseId: 'course-1', completedModuleIds: ['m1-1', 'm1-2'] },
-      { courseId: 'course-7', completedModuleIds: ['m7-1'] }
-    ],
-    savedJobIds: ['job-1', 'job-3'],
-    badges: ['First Step', 'Resume Ready', 'Fast Learner', 'Streak Pioneer', 'College Verified'],
-    streakDays: 5,
-    xpPoints: 1250,
-  },
-  {
-    id: 'usr-college-1',
-    name: 'Prof. R. Anand',
-    email: 'placement@nitdelhi.ac.in',
-    phone: '9845012345',
-    role: 'college',
-    passwordHash: collegeHashed.hash,
-    passwordSalt: collegeHashed.salt,
-    college: 'National Institute of Technology Delhi',
-    collegeId: 'col-1',
-    collegeAisheCode: 'U-0610',
-    collegeWebsite: 'https://nitdelhi.ac.in',
-    accreditation: 'NIRF Ranked #51 | Institute of National Importance',
-    designation: 'Head, Training & Placement Cell',
-    isVerified: true,
-    verificationStatus: 'verified',
-    verificationEvidence: 'AISHE Verified: U-0610 (Ministry of Education Portal)',
-    status: 'active',
-    createdAt: '2026-01-20T10:00:00Z',
-    lastLoginAt: '2026-11-08T10:00:00Z',
-    photoUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=400&q=80',
-    location: 'Narela, New Delhi'
-  },
-  {
-    id: 'usr-recruiter-1',
-    name: 'Priya Verma',
-    email: 'recruiter@bharattech.com',
-    phone: '9812345678',
-    role: 'recruiter',
-    passwordHash: recruiterHashed.hash,
-    passwordSalt: recruiterHashed.salt,
-    companyName: 'BharatTech Innovations',
-    cinOrRegistrationNumber: 'U72200DL2021PTC384729',
-    industry: 'Financial Technology & Software',
-    companyWebsite: 'https://bharattech.com',
-    designation: 'Head of Talent Acquisition',
-    isVerified: true,
-    verificationStatus: 'verified',
-    verificationEvidence: 'CIN Verified: U72200DL2021PTC384729 (Ministry of Corporate Affairs)',
-    status: 'active',
-    createdAt: '2026-02-10T11:00:00Z',
-    lastLoginAt: '2026-11-05T14:30:00Z',
-    photoUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80',
-    location: 'Okhla Phase III, New Delhi',
-  },
-  {
-    id: 'usr-recruiter-techbharat',
-    name: 'Priya Verma',
-    email: 'recruiter@techbharat.org',
-    phone: '9812345679',
-    role: 'recruiter',
-    passwordHash: recruiterHashed.hash,
-    passwordSalt: recruiterHashed.salt,
-    companyName: 'BharatTech Innovations',
-    cinOrRegistrationNumber: 'U72200DL2021PTC384729',
-    industry: 'Financial Technology & Software',
-    companyWebsite: 'https://techbharat.org',
-    designation: 'Head of Talent Acquisition',
-    isVerified: true,
-    verificationStatus: 'verified',
-    verificationEvidence: 'CIN Verified: U72200DL2021PTC384729 (Ministry of Corporate Affairs)',
-    status: 'active',
-    createdAt: '2026-02-10T11:00:00Z',
-    lastLoginAt: '2026-11-05T14:30:00Z',
-    photoUrl: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80',
-    location: 'Okhla Phase III, New Delhi',
-  },
-  {
-    id: 'usr-admin-1',
-    name: 'Dr. R.K. Raman',
-    email: 'admin@yuvamitraa.gov.in',
-    phone: '9999988888',
-    role: 'admin',
-    passwordHash: adminHashed.hash,
-    passwordSalt: adminHashed.salt,
-    adminLevel: 'Super Administrator',
-    designation: 'National Mission Director',
-    isVerified: true,
-    verificationStatus: 'verified',
-    verificationEvidence: 'National Mission Super Admin Clearance',
-    status: 'active',
-    createdAt: '2025-11-01T09:00:00Z',
-    lastLoginAt: '2026-11-06T12:00:00Z',
-    photoUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
-    location: 'Central Secretariat, New Delhi',
-  },
-  {
-    id: 'usr-admin-sanjiv',
-    name: 'Sanjiv Kumar',
-    email: 'sanjivsanju017@gmail.com',
-    phone: '9999977777',
-    role: 'admin',
-    passwordHash: adminHashed.hash,
-    passwordSalt: adminHashed.salt,
-    adminLevel: 'Super Administrator',
-    designation: 'National Platform Administrator',
-    isVerified: true,
-    verificationStatus: 'verified',
-    verificationEvidence: 'National Platform Administrator Clearance',
-    status: 'active',
-    createdAt: '2025-11-01T09:00:00Z',
-    lastLoginAt: '2026-11-06T12:00:00Z',
-    photoUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80',
-    location: 'Central Secretariat, New Delhi',
-  }
-];
+// Registered Users Store (populated exclusively through real registration and verified Firebase sessions)
+const usersDatabase: UserRecord[] = [];
 
 // Ecosystem Databases (Colleges, Companies, Jobs, Applications, Verification Requests, Notifications)
 interface CollegeRecord {
@@ -744,55 +701,7 @@ interface ApplicationRecord {
   notes?: string;
 }
 
-const applicationsDatabase: ApplicationRecord[] = [
-  {
-    id: 'app-1',
-    jobId: 'job-1',
-    jobTitle: 'Frontend React Developer Intern',
-    company: 'BharatTech Innovations',
-    candidateId: 'usr-student-1',
-    candidateName: 'Aarav Sharma',
-    candidateEmail: 'aarav.sharma@example.com',
-    candidatePhone: '+91 98765 43210',
-    candidateCollege: 'National Institute of Technology Delhi',
-    candidateBranch: 'Computer Science & Engineering',
-    candidateGraduationYear: '2026',
-    candidateSkills: ['React', 'JavaScript', 'Tailwind CSS', 'Git', 'REST APIs'],
-    candidateResumeText: 'AARAV SHARMA\nB.Tech Computer Science (NIT Delhi). Built YuvaPortal with React and Tailwind CSS.',
-    status: 'Shortlisted',
-    appliedDate: '2026-11-04',
-    updatedDate: '2026-11-08',
-    coverLetter: 'I have hands-on experience building fast React interfaces and campus web tools. Eager to contribute to financial inclusion products.',
-    matchScore: 92,
-    interviewDate: '2026-11-18',
-    interviewTime: '02:30 PM IST',
-    interviewMode: 'Online (Google Meet/Zoom)',
-    interviewLinkOrVenue: 'https://meet.google.com/yuv-amit-raa',
-    recruiterFeedback: 'Impressive GitHub repository with real campus web apps. Technical round scheduled.',
-    notes: 'Shortlisted for Round 1 Technical Interview.'
-  },
-  {
-    id: 'app-2',
-    jobId: 'job-3',
-    jobTitle: 'Campus Placement Drive: Associate Software Engineer',
-    company: 'NIT Delhi Placement Cell / Partner Consortium',
-    candidateId: 'usr-student-1',
-    candidateName: 'Aarav Sharma',
-    candidateEmail: 'aarav.sharma@example.com',
-    candidatePhone: '+91 98765 43210',
-    candidateCollege: 'National Institute of Technology Delhi',
-    candidateBranch: 'Computer Science & Engineering',
-    candidateGraduationYear: '2026',
-    candidateSkills: ['Data Structures & Algorithms', 'C++', 'SQL'],
-    candidateResumeText: 'AARAV SHARMA - NIT Delhi CSE - CGPA 8.7',
-    status: 'Under Review',
-    appliedDate: '2026-11-07',
-    updatedDate: '2026-11-09',
-    coverLetter: 'Registered for the 2026 campus placement drive with no active backlogs.',
-    matchScore: 88,
-    notes: 'Academic credentials verified by college placement office.'
-  }
-];
+const applicationsDatabase: ApplicationRecord[] = [];
 
 interface NotificationRecord {
   id: string;
@@ -946,28 +855,7 @@ interface AuditLog {
   details?: string;
 }
 
-const auditLogs: AuditLog[] = [
-  {
-    id: 'log-1',
-    timestamp: new Date(Date.now() - 3600000).toISOString(),
-    event: 'USER_LOGIN',
-    identifier: 'aarav.sharma@example.com',
-    role: 'student',
-    status: 'SUCCESS',
-    ip: '127.0.0.1',
-    details: 'Password authentication verified'
-  },
-  {
-    id: 'log-2',
-    timestamp: new Date(Date.now() - 7200000).toISOString(),
-    event: 'USER_LOGIN',
-    identifier: 'recruiter@bharattech.com',
-    role: 'recruiter',
-    status: 'SUCCESS',
-    ip: '127.0.0.1',
-    details: 'Corporate recruiter session issued'
-  }
-];
+const auditLogs: AuditLog[] = [];
 
 function recordAuditLog(event: string, identifier: string, status: 'SUCCESS' | 'FAILED' | 'BLOCKED', details?: string, role?: string, ip?: string) {
   auditLogs.unshift({
@@ -1032,14 +920,22 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       });
     }
 
+    // Enforce strict public role whitelist: only student, recruiter, or experienced
+    if (role !== 'student' && role !== 'recruiter' && role !== 'experienced') {
+      recordAuditLog('UNAUTHORIZED_ROLE_SIGNUP', cleanEmail, 'BLOCKED', `Blocked unauthorized role registration attempt: ${String(role)}`, undefined, clientIp);
+      return res.status(403).json({
+        code: 'auth/unauthorized-role',
+        error: 'Unauthorized role selection. Please select Student, Recruiter, or Experienced Candidate.'
+      });
+    }
+
     // Hash password with PBKDF2
     const { hash, salt } = hashPassword(String(password));
     const newUserId = firebaseUid || `usr-${Date.now()}`;
-    const selectedRole: 'student' | 'college' | 'recruiter' = 
-      role === 'college' ? 'college' : (role === 'recruiter' ? 'recruiter' : 'student');
+    const selectedRole: 'student' | 'recruiter' | 'experienced' = role;
 
-    const isPendingRole = selectedRole === 'college' || selectedRole === 'recruiter';
-    const isAutoVerified = selectedRole === 'student';
+    const isPendingRole = selectedRole === 'recruiter';
+    const isAutoVerified = selectedRole === 'student' || selectedRole === 'experienced';
 
     const newUser: UserRecord = {
       id: newUserId,
@@ -1047,44 +943,38 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       email: cleanEmail,
       phone: req.body.phone ? normalizePhone(req.body.phone) : '',
       role: selectedRole,
+      currentRole: selectedRole === 'experienced' ? (req.body.currentRole?.trim() || '') : undefined,
+      yearsOfExperience: selectedRole === 'experienced' ? (req.body.yearsOfExperience?.trim() || '') : undefined,
       passwordHash: hash,
       passwordSalt: salt,
-      college: selectedRole === 'college' 
-        ? (req.body.collegeName?.trim() || String(name).trim()) 
-        : (college?.trim() || 'National Institute of Technology Delhi'),
-      collegeId: selectedRole === 'college' ? `col-${Date.now()}` : req.body.collegeId,
+      college: college?.trim() || '',
       branch: req.body.branch?.trim() || (selectedRole === 'student' ? 'Computer Science & Engineering' : undefined),
-      course: course?.trim() || (selectedRole === 'student' ? 'B.Tech in Computer Science & Engineering' : undefined),
+      course: course?.trim() || (selectedRole === 'student' ? 'Undergraduate Degree' : undefined),
       studyYear: req.body.studyYear || (selectedRole === 'student' ? '1st Year' : undefined),
       rollNumber: req.body.rollNumber?.trim() || '',
-      cgpa: req.body.cgpa?.trim() || '8.2',
+      cgpa: req.body.cgpa?.trim() || '',
       graduationYear: req.body.graduationYear || '2026',
-      education: req.body.education || 'Undergraduate Degree',
-      institution: college?.trim() || 'National Institute of Technology Delhi',
+      education: req.body.education || (selectedRole === 'experienced' ? 'Working Professional' : 'Undergraduate Degree'),
+      institution: college?.trim() || '',
       companyName: selectedRole === 'recruiter' ? (req.body.companyName?.trim() || String(name).trim()) : undefined,
       cinOrRegistrationNumber: req.body.cinOrRegistrationNumber?.trim() || '',
       industry: req.body.industry?.trim() || 'Information Technology',
       companyWebsite: req.body.companyWebsite?.trim() || '',
-      collegeAisheCode: req.body.aisheCode?.trim() || '',
-      collegeWebsite: req.body.collegeWebsite?.trim() || '',
-      accreditation: req.body.accreditation?.trim() || (selectedRole === 'college' ? 'AICTE / UGC Recognized' : undefined),
-      designation: req.body.designation?.trim() || (selectedRole === 'college' ? 'Placement Officer' : (selectedRole === 'recruiter' ? 'HR / Talent Lead' : undefined)),
+      designation: req.body.designation?.trim() || (selectedRole === 'recruiter' ? 'HR / Talent Lead' : (selectedRole === 'experienced' ? (req.body.currentRole?.trim() || 'Experienced Professional') : undefined)),
       isVerified: isAutoVerified,
       verificationStatus: isAutoVerified ? 'verified' : 'pending',
-      verificationEvidence: isAutoVerified ? 'Academic Enrollment Record' : undefined,
+      verificationEvidence: isAutoVerified ? 'Registered Account' : undefined,
       status: 'active',
       createdAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
-      photoUrl: selectedRole === 'college' 
-        ? 'https://images.unsplash.com/photo-1541339907198-e08756dedf3f?auto=format&fit=crop&w=400&q=80'
-        : (selectedRole === 'recruiter'
+      photoUrl: selectedRole === 'recruiter'
         ? 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=400&q=80'
-        : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'),
-      skills: selectedRole === 'student' ? ['Communication', 'Computer Literacy', 'Problem Solving', 'Teamwork'] : [],
-      interests: selectedRole === 'student' ? ['Internships', 'Career Growth', 'Skill Courses', 'Tech Jobs'] : [],
-      location: location?.trim() || 'New Delhi, India',
-      preferredRoles: selectedRole === 'student' ? ['Software Intern', 'Web Developer', 'Graduate Engineer Trainee'] : [],
-      enrolledCourses: selectedRole === 'student' ? [{ courseId: 'course-1', completedModuleIds: [] }] : [],
+        : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+      skills: selectedRole === 'recruiter' ? [] : ['Communication', 'Problem Solving', 'Teamwork'],
+      interests: selectedRole === 'recruiter' ? [] : (selectedRole === 'experienced' ? ['Full-Time Roles', 'Leadership', 'Career Switch'] : ['Internships', 'Career Growth', 'Skill Courses']),
+      location: location?.trim() || 'India',
+      preferredRoles: selectedRole === 'recruiter' ? [] : (selectedRole === 'experienced' ? [req.body.currentRole?.trim() || 'Senior Specialist'] : ['Software Intern', 'Graduate Trainee']),
+      enrolledCourses: selectedRole === 'recruiter' ? [] : [{ courseId: 'course-1', completedModuleIds: [] }],
       savedJobIds: [],
       badges: isAutoVerified ? ['New Explorer', 'Profile Complete'] : ['Pending Verification'],
       streakDays: 1,
@@ -1093,51 +983,7 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
     usersDatabase.push(newUser);
 
-    // If College, register in collegesDatabase & submit verification request
-    if (selectedRole === 'college') {
-      const collegeRecord: CollegeRecord = {
-        id: newUser.collegeId || `col-${Date.now()}`,
-        name: newUser.college || newUser.name,
-        aisheCode: newUser.collegeAisheCode || 'AISHE-PENDING',
-        email: cleanEmail,
-        phone: newUser.phone || '+91 11 0000 0000',
-        website: newUser.collegeWebsite || 'https://university.edu.in',
-        state: req.body.state || 'Delhi',
-        city: location?.trim() || 'New Delhi',
-        accreditation: newUser.accreditation || 'UGC / AICTE Approved',
-        contactPerson: newUser.name,
-        designation: newUser.designation || 'Training & Placement Officer',
-        departments: req.body.departments || ['Computer Science', 'Information Technology', 'Electronics'],
-        isVerified: false,
-        verificationStatus: 'pending',
-        enrolledStudentsCount: 0,
-        activeDrivesCount: 0,
-        registeredAt: new Date().toISOString()
-      };
-      collegesDatabase.push(collegeRecord);
-
-      verificationRequestsDatabase.unshift({
-        id: `vreq-${Date.now()}`,
-        entityId: collegeRecord.id,
-        entityType: 'college',
-        name: collegeRecord.name,
-        identifier: collegeRecord.aisheCode,
-        submittedAt: new Date().toISOString(),
-        status: 'pending',
-        details: `New college account registered by ${newUser.name} (${cleanEmail}). AISHE: ${collegeRecord.aisheCode}.`
-      });
-
-      notificationsDatabase.unshift({
-        id: `notif-${Date.now()}`,
-        targetRole: 'admin',
-        title: 'New College Verification Request',
-        message: `${collegeRecord.name} registered. Please verify AISHE code ${collegeRecord.aisheCode}.`,
-        date: 'Just now',
-        type: 'verification',
-        read: false,
-        actionTab: 'admin'
-      });
-    }
+    // Public signup no longer permits college role creation
 
     // If Recruiter / Company, register in companiesDatabase & submit verification request
     if (selectedRole === 'recruiter') {
@@ -1257,10 +1103,9 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     const cleanIdentifier = String(identifier).trim().toLowerCase();
     const cleanPhone = normalizePhone(cleanIdentifier);
 
-    // Check Lockout Status (bypassed for platform admin sanjivsanju017@gmail.com)
-    const isPlatformAdmin = cleanIdentifier === 'sanjivsanju017@gmail.com';
+    // Check Lockout Status
     const attemptRecord = loginAttempts.get(cleanIdentifier);
-    if (!isPlatformAdmin && attemptRecord && attemptRecord.lockedUntil && attemptRecord.lockedUntil > Date.now()) {
+    if (attemptRecord && attemptRecord.lockedUntil && attemptRecord.lockedUntil > Date.now()) {
       const remainingSeconds = Math.ceil((attemptRecord.lockedUntil - Date.now()) / 1000);
       recordAuditLog('LOGIN_BLOCKED', cleanIdentifier, 'BLOCKED', `Account locked. Remaining seconds: ${remainingSeconds}`, undefined, clientIp);
       return res.status(429).json({
@@ -1271,35 +1116,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     }
 
     // Find User by Email or Mobile
-    let user = usersDatabase.find(u => 
+    const user = usersDatabase.find(u => 
       u.email.toLowerCase() === cleanIdentifier || 
       normalizePhone(u.phone) === cleanPhone
     );
-
-    // If platform admin account does not exist in memory, create it immediately
-    if (!user && isPlatformAdmin) {
-      const newAdminHash = hashPassword(password || 'Admin@123');
-      user = {
-        id: 'usr-admin-sanjiv',
-        name: 'Sanjiv Kumar',
-        email: 'sanjivsanju017@gmail.com',
-        phone: '9999977777',
-        role: 'admin',
-        passwordHash: newAdminHash.hash,
-        passwordSalt: newAdminHash.salt,
-        adminLevel: 'Super Administrator',
-        designation: 'National Platform Administrator',
-        isVerified: true,
-        verificationStatus: 'verified',
-        verificationEvidence: 'National Platform Administrator Clearance',
-        status: 'active',
-        createdAt: '2025-11-01T09:00:00Z',
-        lastLoginAt: new Date().toISOString(),
-        photoUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80',
-        location: 'Central Secretariat, New Delhi',
-      };
-      usersDatabase.push(user);
-    }
 
     if (!user) {
       // Record failed attempt
@@ -1312,7 +1132,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       recordAuditLog('LOGIN_FAILED', cleanIdentifier, 'FAILED', 'Account not found', undefined, clientIp);
 
       return res.status(401).json({
-        error: 'No registered account found with this email. Please click "Create Account" below to register.',
+        code: 'auth/user-not-found',
+        error: 'No account found with this email address.',
         notFound: true
       });
     }
@@ -1322,30 +1143,10 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       return res.status(403).json({ error: 'This account has been suspended by an administrator. Please contact support.' });
     }
 
-    // Verify Password with support for common test formats
-    let isValid = verifyPassword(password, user.passwordHash, user.passwordSalt);
-
-    // Fallback checks for platform admin and seeded role accounts
-    if (!isValid) {
-      const passClean = password.trim();
-      const passLower = passClean.toLowerCase();
-
-      if (isPlatformAdmin && passClean.length >= 6) {
-        // Automatically accept and sync new password for platform admin
-        const updatedHash = hashPassword(passClean);
-        user.passwordHash = updatedHash.hash;
-        user.passwordSalt = updatedHash.salt;
-        isValid = true;
-      } else if (user.role === 'admin' && (passLower === 'admin@123' || passLower === 'admin123' || passLower === 'admin')) {
-        isValid = true;
-      } else if (user.role === 'student' && (passLower === 'student@123' || passLower === 'student123')) {
-        isValid = true;
-      } else if (user.role === 'college' && (passLower === 'college@123' || passLower === 'college123')) {
-        isValid = true;
-      } else if (user.role === 'recruiter' && (passLower === 'recruiter@123' || passLower === 'recruiter123')) {
-        isValid = true;
-      }
-    }
+    // Strict PBKDF2 password verification (no hardcoded fallback passwords)
+    const isValid = user.passwordHash && user.passwordSalt
+      ? verifyPassword(password, user.passwordHash, user.passwordSalt)
+      : false;
 
     if (!isValid) {
       const count = (attemptRecord ? attemptRecord.count : 0) + 1;
@@ -1358,6 +1159,7 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
 
       const remainingAttempts = Math.max(0, MAX_FAILED_ATTEMPTS - count);
       return res.status(401).json({
+        code: 'auth/invalid-credential',
         error: `Incorrect password. ${remainingAttempts > 0 ? `${remainingAttempts} attempt(s) remaining before temporary lockout.` : 'Account locked for 15 minutes.'}`,
         remainingAttempts
       });
@@ -1490,7 +1292,7 @@ app.post('/api/auth/login-otp-verify', (req: Request, res: Response) => {
     }
 
     const cleanOtp = String(otp).trim();
-    const isValidOtp = record.code === cleanOtp || cleanOtp === '123456';
+    const isValidOtp = record.code === cleanOtp;
     if (!isValidOtp) {
       record.attempts = (record.attempts || 0) + 1;
       if (record.attempts >= 4) {
@@ -1540,53 +1342,102 @@ app.post('/api/auth/login-otp-verify', (req: Request, res: Response) => {
 });
 
 // 1d. Firebase Auth Verified Login / Registration Exchange
-app.post('/api/auth/firebase-login', (req: Request, res: Response) => {
+app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
   try {
-    const { firebaseUid, phoneNumber, email, name, role, photoUrl } = req.body;
+    const authHeader = req.headers.authorization;
+    const rawIdToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : req.body.idToken;
+    const { firebaseUid, phoneNumber, email, name, role, photoUrl, currentRole, yearsOfExperience } = req.body;
     const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
 
-    if (!firebaseUid) {
+    let verifiedUid = firebaseUid;
+    let verifiedEmail = email ? String(email).trim().toLowerCase() : '';
+    let verifiedClaims: Record<string, any> = {};
+
+    if (rawIdToken) {
+      try {
+        const decoded = await verifyFirebaseIdToken(rawIdToken);
+        verifiedUid = decoded.uid || decoded.sub || firebaseUid;
+        verifiedEmail = (decoded.email || verifiedEmail || '').toLowerCase();
+        verifiedClaims = decoded;
+      } catch (tokenErr: any) {
+        return res.status(401).json({
+          code: 'auth/invalid-token',
+          error: 'Invalid or expired Firebase authentication token.'
+        });
+      }
+    }
+
+    if (!verifiedUid) {
       return res.status(400).json({ error: 'Firebase UID is required for session authentication.' });
     }
 
+    // Strictly reject client attempts to request admin or college role via public firebase-login
+    if (role && role !== 'student' && role !== 'recruiter' && role !== 'experienced') {
+      const hasValidAdminClaim =
+        role === 'admin' &&
+        verifiedClaims.admin === true &&
+        verifiedClaims.email_verified === true &&
+        verifiedEmail === AUTHORIZED_ADMIN_EMAIL;
+      if (!hasValidAdminClaim) {
+        recordAuditLog('UNAUTHORIZED_ROLE_ATTEMPT', verifiedEmail || verifiedUid, 'BLOCKED', `Blocked unauthorized role request: ${String(role)}`, undefined, clientIp);
+        return res.status(403).json({
+          code: 'auth/unauthorized-role',
+          error: 'Unauthorized role. You do not have permission to access this role.'
+        });
+      }
+    }
+
     const cleanPhone = phoneNumber ? normalizePhone(phoneNumber) : '';
-    const cleanEmail = email ? String(email).trim().toLowerCase() : '';
+    const allowedPublicRole: 'student' | 'recruiter' | 'experienced' =
+      role === 'recruiter' || role === 'experienced' ? role : 'student';
 
     let user = usersDatabase.find(u => 
-      u.id === firebaseUid ||
-      (cleanEmail && u.email.toLowerCase() === cleanEmail) ||
-      (cleanPhone && normalizePhone(u.phone) === cleanPhone)
+      u.id === verifiedUid ||
+      (verifiedEmail && u.email.toLowerCase() === verifiedEmail)
     );
 
     const isNewUser = !user;
 
     if (!user) {
       const generatedName = name?.trim() || (cleanPhone ? `Yuva Member (+91 ${cleanPhone.slice(-4)})` : 'Yuva Candidate');
+      const isTokenAdmin =
+        verifiedClaims.admin === true &&
+        verifiedClaims.email_verified === true &&
+        verifiedEmail === AUTHORIZED_ADMIN_EMAIL;
+
       const newUser: UserRecord = {
-        id: firebaseUid,
+        id: verifiedUid,
         name: generatedName,
-        email: cleanEmail || `${cleanPhone || firebaseUid}@yuvamitraa.app`,
-        phone: cleanPhone ? `+91 ${cleanPhone}` : '+91 98765 00000',
-        role: role === 'recruiter' ? 'recruiter' : 'student',
-        college: 'National University / Institute',
-        course: 'Career & Professional Studies',
-        education: 'Career & Professional Studies',
+        email: verifiedEmail || `${cleanPhone || verifiedUid}@yuvamitraa.app`,
+        phone: cleanPhone ? `+91 ${cleanPhone}` : '',
+        role: isTokenAdmin ? 'admin' : allowedPublicRole,
+        currentRole: currentRole || undefined,
+        yearsOfExperience: yearsOfExperience || undefined,
+        college: '',
+        course: '',
+        education: isTokenAdmin ? 'Platform Administration' : (allowedPublicRole === 'experienced' ? 'Working Professional' : 'Career & Professional Studies'),
         isVerified: true,
         status: 'active',
         createdAt: new Date().toISOString(),
         lastLoginAt: new Date().toISOString(),
         photoUrl: photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-        location: 'Bengaluru, Karnataka',
+        location: 'India',
         passwordHash: '',
         passwordSalt: ''
       };
       usersDatabase.push(newUser);
       user = newUser;
-      recordAuditLog('FIREBASE_REGISTER', cleanEmail || cleanPhone || firebaseUid, 'SUCCESS', 'New user registered via Firebase Auth', user.role, clientIp);
+      recordAuditLog('FIREBASE_REGISTER', verifiedEmail || cleanPhone || verifiedUid, 'SUCCESS', 'New user registered via Firebase Auth', user.role, clientIp);
     } else {
       user.lastLoginAt = new Date().toISOString();
       if (photoUrl && !user.photoUrl) user.photoUrl = photoUrl;
-      recordAuditLog('FIREBASE_LOGIN', cleanEmail || cleanPhone || firebaseUid, 'SUCCESS', 'Authenticated via Firebase Auth', user.role, clientIp);
+      // Sync authoritative non-admin Firestore role if provided and valid
+      if (role === 'student' || role === 'recruiter' || role === 'experienced') {
+        if (user.role !== 'admin') {
+          user.role = role;
+        }
+      }
+      recordAuditLog('FIREBASE_LOGIN', verifiedEmail || cleanPhone || verifiedUid, 'SUCCESS', 'Authenticated via Firebase Auth', user.role, clientIp);
     }
 
     const token = generateSessionToken();
@@ -1608,6 +1459,111 @@ app.post('/api/auth/firebase-login', (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Firebase login error:', error);
     return res.status(500).json({ error: 'Failed to process Firebase authentication session.' });
+  }
+});
+
+// 1e. Dedicated Server-Side Admin Verification & Custom Claim Provisioning (/api/auth/admin-verify)
+app.post('/api/auth/admin-verify', async (req: Request, res: Response) => {
+  const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+  try {
+    const authHeader = req.headers.authorization;
+    const idToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : req.body?.idToken;
+
+    if (!idToken) {
+      return res.status(401).json({
+        code: 'auth/missing-token',
+        error: 'Firebase authentication token is required for admin verification.'
+      });
+    }
+
+    const decoded = await verifyFirebaseIdToken(idToken);
+    const decodedEmail = String(decoded.email || '').trim().toLowerCase();
+
+    if (decodedEmail !== AUTHORIZED_ADMIN_EMAIL) {
+      recordAuditLog('ADMIN_LOGIN_DENIED', decodedEmail || decoded.uid, 'BLOCKED', 'Unauthorized email attempted admin verification', undefined, clientIp);
+      return res.status(403).json({
+        code: 'auth/unauthorized-role',
+        error: 'Access denied. This account does not have administrator privileges.'
+      });
+    }
+
+    if (decoded.email_verified !== true) {
+      recordAuditLog('ADMIN_UNVERIFIED_EMAIL', decodedEmail, 'BLOCKED', 'Email must be verified before granting admin claim', undefined, clientIp);
+      return res.status(403).json({
+        code: 'auth/email-not-verified',
+        error: 'Email verification is required before admin access can be granted. Please verify your email address and try again.'
+      });
+    }
+
+    let claimGranted = decoded.admin === true;
+    if (!claimGranted) {
+      try {
+        await getFirebaseAdminAuth().setCustomUserClaims(decoded.uid, {
+          ...(decoded.claims || {}),
+          admin: true
+        });
+        claimGranted = true;
+        recordAuditLog('ADMIN_CLAIM_GRANTED', decodedEmail, 'SUCCESS', 'Firebase custom claim admin: true granted via Admin SDK', 'admin', clientIp);
+      } catch (claimErr: any) {
+        console.error('[FirebaseAdmin] setCustomUserClaims failed:', claimErr?.message || claimErr);
+        recordAuditLog('ADMIN_CLAIM_ERROR', decodedEmail, 'FAILED', `Failed to set custom claim via Admin SDK: ${claimErr?.message || 'unknown error'}`, 'admin', clientIp);
+        return res.status(503).json({
+          code: 'auth/admin-claim-unavailable',
+          error: 'Server could not assign Firebase admin custom claim. Ensure Firebase Admin SDK credentials are configured.'
+        });
+      }
+    }
+
+    let adminUser = usersDatabase.find(u => u.id === decoded.uid || u.email.toLowerCase() === AUTHORIZED_ADMIN_EMAIL);
+    if (!adminUser) {
+      adminUser = {
+        id: decoded.uid,
+        name: decoded.name || 'Platform Administrator',
+        email: AUTHORIZED_ADMIN_EMAIL,
+        phone: '',
+        role: 'admin',
+        passwordHash: '',
+        passwordSalt: '',
+        adminLevel: 'Super Administrator',
+        designation: 'National Platform Administrator',
+        isVerified: true,
+        verificationStatus: 'verified',
+        verificationEvidence: 'Firebase Custom Claim (admin: true) Verified',
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        lastLoginAt: new Date().toISOString(),
+        photoUrl: decoded.picture || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=400&q=80',
+        location: 'New Delhi, India'
+      };
+      usersDatabase.push(adminUser);
+    } else {
+      adminUser.role = 'admin';
+      adminUser.lastLoginAt = new Date().toISOString();
+    }
+
+    const token = generateSessionToken();
+    sessions.set(token, {
+      token,
+      userId: adminUser.id,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 12 * 60 * 60 * 1000
+    });
+
+    recordAuditLog('ADMIN_LOGIN_SUCCESS', AUTHORIZED_ADMIN_EMAIL, 'SUCCESS', 'Verified admin authenticated via custom claims', 'admin', clientIp);
+
+    return res.json({
+      success: true,
+      claimGranted,
+      token,
+      user: sanitizeUser(adminUser),
+      role: 'admin'
+    });
+  } catch (err: any) {
+    console.error('Admin verification error:', err);
+    return res.status(401).json({
+      code: 'auth/invalid-credential',
+      error: err?.message || 'Admin authentication failed.'
+    });
   }
 });
 
@@ -1953,7 +1909,10 @@ app.post('/api/auth/otp/register-complete', (req: Request, res: Response) => {
       existingUser.course = course?.trim() || educationLevel || existingUser.course;
       existingUser.education = educationLevel || existingUser.education;
       existingUser.institution = college?.trim() || existingUser.institution;
-      existingUser.role = role === 'recruiter' ? 'recruiter' : 'student';
+      if (role !== 'student' && role !== 'recruiter' && role !== 'experienced') {
+        return res.status(403).json({ code: 'auth/unauthorized-role', error: 'Unauthorized role selection.' });
+      }
+      existingUser.role = role;
       existingUser.location = location?.trim() || existingUser.location;
       existingUser.age = age ? Number(age) : existingUser.age;
       existingUser.lastLoginAt = new Date().toISOString();
@@ -1988,7 +1947,7 @@ app.post('/api/auth/otp/register-complete', (req: Request, res: Response) => {
       name: name.trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      role: role === 'recruiter' ? 'recruiter' : 'student',
+      role: role === 'recruiter' ? 'recruiter' : (role === 'experienced' ? 'experienced' : 'student'),
       passwordHash: hash,
       passwordSalt: salt,
       college: college?.trim() || 'Institute / University',
@@ -2081,6 +2040,10 @@ app.post('/api/auth/register-init', (req: Request, res: Response) => {
       return res.status(429).json({ error: `Please wait ${waitSeconds}s before requesting a new OTP.`, waitSeconds });
     }
 
+    if (role !== 'student' && role !== 'recruiter' && role !== 'experienced') {
+      return res.status(403).json({ code: 'auth/unauthorized-role', error: 'Unauthorized role selection.' });
+    }
+
     // Generate real 6-digit OTP
     const otpCode = generateOTP();
     const payload = {
@@ -2088,8 +2051,8 @@ app.post('/api/auth/register-init', (req: Request, res: Response) => {
       email: cleanEmail,
       phone: cleanPhone,
       password,
-      role: role === 'recruiter' ? 'recruiter' : 'student',
-      college: college?.trim() || 'University of Delhi',
+      role: role as 'student' | 'recruiter' | 'experienced',
+      college: college?.trim() || '',
       course: course?.trim() || 'Undergraduate Degree',
       studyYear: studyYear?.trim() || '3rd Year',
       companyName: companyName?.trim() || '',
@@ -2335,7 +2298,7 @@ app.post('/api/auth/reset-password', (req: Request, res: Response) => {
     }
 
     const cleanOtp = String(otp).trim();
-    const isValidOtp = record.code === cleanOtp || cleanOtp === '123456';
+    const isValidOtp = record.code === cleanOtp;
     if (!isValidOtp) {
       record.attempts = (record.attempts || 0) + 1;
       return res.status(400).json({ error: 'Invalid OTP code. Please check and try again.' });
@@ -2415,6 +2378,12 @@ app.post('/api/auth/google', (req: Request, res: Response) => {
       usersDatabase.push(user);
       recordAuditLog('GOOGLE_SIGNUP', cleanEmail, 'SUCCESS', 'New user registered via Google Sign-In', 'student');
     } else {
+      if (user.role === 'admin' || user.role === 'college') {
+        return res.status(403).json({
+          code: 'auth/unauthorized-role',
+          error: 'Unauthorized role for public sign-in.'
+        });
+      }
       user.lastLoginAt = new Date().toISOString();
       recordAuditLog('GOOGLE_LOGIN', cleanEmail, 'SUCCESS', 'Google Sign-In session authenticated', user.role);
     }
@@ -2735,20 +2704,35 @@ app.post('/api/jobs/report', (req: Request, res: Response) => {
 // ADMIN MANAGEMENT ENDPOINTS
 // ------------------------------------------
 
-// Middleware to verify admin token
-function requireAdmin(req: Request, res: Response, next: () => void) {
+// Middleware to verify admin token (supports verified backend admin session or Firebase ID token with admin: true claim)
+async function requireAdmin(req: Request, res: Response, next: () => void) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Admin authentication required.' });
   }
   const token = authHeader.split(' ')[1];
   const session = sessions.get(token);
-  if (!session) return res.status(401).json({ error: 'Invalid admin session.' });
-  const user = usersDatabase.find(u => u.id === session.userId);
-  if (!user || user.role !== 'admin') {
+  if (session && Date.now() <= session.expiresAt) {
+    const user = usersDatabase.find(u => u.id === session.userId);
+    if (user && user.role === 'admin' && user.email.toLowerCase() === AUTHORIZED_ADMIN_EMAIL) {
+      return next();
+    }
     return res.status(403).json({ error: 'Access forbidden: Administrator privileges required.' });
   }
-  next();
+
+  try {
+    const decoded = await verifyFirebaseIdToken(token);
+    if (
+      decoded.admin === true &&
+      decoded.email_verified === true &&
+      String(decoded.email || '').toLowerCase() === AUTHORIZED_ADMIN_EMAIL
+    ) {
+      return next();
+    }
+    return res.status(403).json({ error: 'Access forbidden: Verified admin custom claim required.' });
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired admin session.' });
+  }
 }
 
 app.get('/api/admin/stats', requireAdmin, (_req: Request, res: Response) => {
@@ -3047,33 +3031,44 @@ app.post('/api/external/sources/:id/toggle', requireAdmin, (req: Request, res: R
 // 7. Personalized Recommendations for Student
 app.post('/api/external/recommendations', async (req: Request, res: Response) => {
   try {
-    const { studentProfile } = req.body;
+    const { studentProfile, limit = 4 } = req.body;
+    const maxItems = Math.min(Math.max(Number(limit) || 4, 1), 12);
     const allInternships = syncEngine.getInternships();
     const allJobs = syncEngine.getJobs();
     const genuineOpportunities = [
       ...allInternships.map(i => ({
         id: i.id,
+        jobId: i.id,
         title: i.title,
         company: i.companyName,
+        companyName: i.companyName,
         type: 'Internship',
         location: i.location,
-        skills: i.skills,
+        skills: i.skills || [],
         stipend: i.stipend,
+        stipendOrSalary: i.stipend,
         deadline: i.applicationDeadline,
         source: i.sourceName,
-        applyUrl: i.applyUrl
+        sourceName: i.sourceName,
+        applyUrl: i.applyUrl,
+        originalUrl: i.applyUrl
       })),
       ...allJobs.map(j => ({
         id: j.id,
+        jobId: j.id,
         title: j.title,
         company: j.companyName,
+        companyName: j.companyName,
         type: j.employmentType,
         location: j.location,
-        skills: j.requiredSkills,
+        skills: j.requiredSkills || [],
         stipend: j.salary,
+        stipendOrSalary: j.salary,
         deadline: 'Active Opening',
         source: j.sourceName,
-        applyUrl: j.applyUrl
+        sourceName: j.sourceName,
+        applyUrl: j.applyUrl,
+        originalUrl: j.applyUrl
       }))
     ];
 
@@ -3095,7 +3090,7 @@ Analyze this student profile:
 Available genuine opportunities (DO NOT INVENT ANY OPPORTUNITY NOT IN THIS LIST):
 ${JSON.stringify(genuineOpportunities, null, 2)}
 
-Rank the top 4 most suitable genuine opportunities for this student.
+Rank the top ${maxItems} most suitable genuine opportunities for this student.
 For each opportunity, calculate an honest match percentage (between 50 and 99), provide a 1-sentence specific match reason based strictly on their skills and branch.
 Return valid JSON matching this schema:
 [
@@ -3106,22 +3101,31 @@ Return valid JSON matching this schema:
   }
 ]`;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json',
-          }
-        });
+        const response = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+            }
+          }),
+          12000,
+          'Recommendations'
+        );
 
         const text = response.text || '[]';
-        const parsed = JSON.parse(text);
-        const enriched = parsed.map((rec: any) => {
-          const opp = genuineOpportunities.find(o => o.id === rec.id);
-          return { ...opp, matchScore: rec.matchScore, matchReason: rec.matchReason };
-        }).filter(Boolean);
+        const parsed = cleanAndParseJSON(text);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const enriched = parsed.map((rec: any) => {
+            const opp = genuineOpportunities.find(o => o.id === (rec.id || rec.jobId));
+            if (!opp) return null;
+            return { ...opp, matchScore: rec.matchScore, matchReason: rec.matchReason };
+          }).filter(Boolean).slice(0, maxItems);
 
-        return res.json({ success: true, recommendations: enriched });
+          if (enriched.length > 0) {
+            return res.json({ success: true, recommendations: enriched });
+          }
+        }
       } catch (geminiErr: any) {
         console.warn('[Recommendations] Gemini fallback:', geminiErr.message);
       }
@@ -3130,7 +3134,7 @@ Return valid JSON matching this schema:
     // Deterministic fallback matching
     const userSkills = (studentProfile.skills || []).map((s: string) => s.toLowerCase());
     const ranked = genuineOpportunities.map(opp => {
-      const oppSkills = opp.skills.map((s: string) => s.toLowerCase());
+      const oppSkills = (opp.skills || []).map((s: string) => s.toLowerCase());
       const common = oppSkills.filter((s: string) => userSkills.some((us: string) => us.includes(s) || s.includes(us)));
       const score = Math.min(95, Math.max(55, Math.round(50 + (common.length / Math.max(1, oppSkills.length)) * 45)));
       return {
@@ -3140,7 +3144,7 @@ Return valid JSON matching this schema:
           ? `Matches your verified skills in ${common.join(', ')}.`
           : `Relevant for ${studentProfile.branch || 'your degree'} with high career growth.`
       };
-    }).sort((a, b) => b.matchScore - a.matchScore).slice(0, 4);
+    }).sort((a, b) => b.matchScore - a.matchScore).slice(0, maxItems);
 
     return res.json({ success: true, recommendations: ranked });
   } catch (err: any) {
@@ -3788,6 +3792,21 @@ const ai = new GoogleGenAI({
   },
 });
 
+// Helper to bound external Gemini API calls so Express endpoints never hang indefinitely
+async function withTimeout<T>(promise: Promise<T>, ms: number = 12000, label: string = 'Gemini API'): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} request timed out after ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // Helper for safe JSON parsing from Gemini
 function cleanAndParseJSON(rawText: string) {
   let cleaned = rawText.trim();
@@ -3837,16 +3856,23 @@ Analyze the gap and return a valid JSON object matching this schema:
 }
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
+    if (process.env.GEMINI_API_KEY) {
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Eligibility'
+      );
 
-    const result = cleanAndParseJSON(response.text || '{}');
-    return res.json(result);
+      const result = cleanAndParseJSON(response.text || '{}');
+      return res.json(result);
+    }
+    throw new Error('GEMINI_API_KEY not configured, using fallback scoring');
   } catch (error: any) {
     console.error('AI Eligibility error:', error);
     // Graceful fallback response so student never gets stuck
@@ -3922,32 +3948,48 @@ STUDENT PROFILE CONTEXT:
 - Completed Projects: ${(userContext?.projects || []).map((p: any) => p.title || p).join(', ') || 'Academic Projects'}
 - Enrolled Courses: ${(userContext?.enrolledCourses || []).length} course(s) on YuvaMitraa`;
 
-    const contents = [];
+    const rawTurns: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
     if (Array.isArray(history)) {
       for (const h of history.slice(-10)) {
-        contents.push({
+        if (!h || !h.text || !String(h.text).trim()) continue;
+        rawTurns.push({
           role: h.sender === 'user' ? 'user' : 'model',
-          parts: [{ text: h.text }]
+          parts: [{ text: String(h.text).trim() }]
         });
       }
     }
-    contents.push({
+    rawTurns.push({
       role: 'user',
-      parts: [{ text: message }]
+      parts: [{ text: String(message || '').trim() || 'Hello' }]
     });
+
+    // Gemini requires contents to begin with a 'user' role and alternate roles cleanly
+    const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+    for (const turn of rawTurns) {
+      if (contents.length === 0 && turn.role !== 'user') continue;
+      if (contents.length > 0 && contents[contents.length - 1].role === turn.role) {
+        contents[contents.length - 1].parts.push(...turn.parts);
+      } else {
+        contents.push(turn);
+      }
+    }
 
     let reply = '';
     let suggestedQuestions: string[] = [];
 
     if (process.env.GEMINI_API_KEY) {
       try {
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents,
-          config: {
-            systemInstruction,
-          },
-        });
+        const response = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-4-hydrogen',
+            contents,
+            config: {
+              systemInstruction,
+            },
+          }),
+          12000,
+          'AI Mentor Chat'
+        );
         reply = response.text || '';
       } catch (geminiErr: any) {
         console.warn('[AI Mentor Chat] Gemini call notice:', geminiErr.message);
@@ -4008,30 +4050,34 @@ app.post('/api/ai/tts', async (req: Request, res: Response) => {
     if (process.env.GEMINI_API_KEY) {
       try {
         const cleanText = String(text).slice(0, 400).replace(/[*#_`]/g, '');
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.8-flash-lite-tts',
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  text: cleanText,
-                  speechMetadata: {
-                    style: language === 'Kannada' ? 'Clear, warm Indian Kannada speaker' : 'Clear, friendly Indian career mentor',
+        const response = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-3.8-flash-lite-tts',
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: cleanText,
+                    speechMetadata: {
+                      style: language === 'Kannada' ? 'Clear, warm Indian Kannada speaker' : 'Clear, friendly Indian career mentor',
+                    },
                   },
+                ],
+              },
+            ],
+            config: {
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: 'Kore' },
                 },
-              ],
-            },
-          ],
-          config: {
-            responseModalities: ['AUDIO'],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: 'Kore' },
               },
             },
-          },
-        });
+          }),
+          12000,
+          'AI TTS'
+        );
 
         const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
         if (base64Audio) {
@@ -4065,15 +4111,19 @@ app.post('/api/ai/transcribe', async (req: Request, res: Response) => {
           },
         };
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-3.5-transcribe',
-          contents: {
-            parts: [
-              audioPart,
-              { text: `Transcribe this spoken query accurately into text. The language is ${language} (Kannada or English). Return only the transcript text without quotation marks or notes.` },
-            ],
-          },
-        });
+        const response = await withTimeout(
+          ai.models.generateContent({
+            model: 'gemini-3.5-transcribe',
+            contents: {
+              parts: [
+                audioPart,
+                { text: `Transcribe this spoken query accurately into text. The language is ${language} (Kannada or English). Return only the transcript text without quotation marks or notes.` },
+              ],
+            },
+          }),
+          12000,
+          'AI Transcribe'
+        );
 
         return res.json({ success: true, text: response.text?.trim() || '' });
       } catch (transcribeErr: any) {
@@ -4113,13 +4163,17 @@ Return a valid JSON object matching:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Resume Review'
+      );
 
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
@@ -4185,13 +4239,17 @@ Return JSON:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Resume Generate'
+      );
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
     }
@@ -4263,13 +4321,17 @@ Return JSON:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Resume Enhance'
+      );
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
     }
@@ -4320,13 +4382,17 @@ Return JSON:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Mock Interview'
+      );
 
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
@@ -4381,13 +4447,17 @@ Return JSON:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Interview Question'
+      );
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
     }
@@ -4442,13 +4512,17 @@ Return a valid JSON object matching:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Career Roadmap'
+      );
 
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
@@ -4584,13 +4658,17 @@ Return JSON:
 `;
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            responseMimeType: 'application/json',
+          },
+        }),
+        12000,
+        'Learning Plan'
+      );
       const result = cleanAndParseJSON(response.text || '{}');
       return res.json(result);
     }
@@ -4665,13 +4743,17 @@ app.post('/api/ai/translate', async (req: Request, res: Response) => {
     }
 
     if (process.env.GEMINI_API_KEY) {
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: `Translate the following text accurately and naturally into ${targetLanguage}. Maintain any formatting and technical terms where appropriate.
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: `Translate the following text accurately and naturally into ${targetLanguage}. Maintain any formatting and technical terms where appropriate.
 Only return the translated string, without extra comments or quotation marks:
 
 ${text}`,
-      });
+        }),
+        12000,
+        'Translate'
+      );
 
       return res.json({ translatedText: response.text?.trim() || text });
     }

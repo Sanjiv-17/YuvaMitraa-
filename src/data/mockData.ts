@@ -1,49 +1,24 @@
 import { Job, Course, GovernmentScheme, UserProfile } from '../types';
 
 export const INITIAL_USER: UserProfile = {
-  id: 'usr-101',
-  name: 'Aarav Sharma',
-  email: 'aarav.sharma@example.com',
-  phone: '+91 98765 43210',
+  id: 'usr-default',
+  name: 'Yuva Member',
+  email: '',
+  phone: '',
   role: 'student',
   photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-  education: 'B.Tech in Computer Science / IT (3rd Year)',
-  institution: 'National Institute of Technology',
+  education: 'B.Tech in Computer Science / IT',
+  institution: '',
   graduationYear: '2026',
   skills: ['JavaScript', 'HTML5', 'CSS3', 'React', 'Python Basics', 'Git', 'Problem Solving', 'Public Speaking'],
   interests: ['Frontend Web Development', 'AI Tools', 'Startups', 'Fintech', 'Youth Leadership'],
-  location: 'Connaught Place, New Delhi',
+  location: 'New Delhi, India',
   coordinates: {
     lat: 28.6315,
     lng: 77.2167,
   },
-  resumeFileName: 'Aarav_Sharma_Resume_2026.pdf',
-  resumeText: `AARAV SHARMA
-Email: aarav.sharma@example.com | Phone: +91 98765 43210 | Location: New Delhi
-GitHub: github.com/aarav-dev | LinkedIn: linkedin.com/in/aarav-sharma
-
-EDUCATION
-B.Tech in Computer Science & Engineering (2022 - 2026)
-National Institute of Technology, CGPA: 8.4/10
-
-TECHNICAL SKILLS
-- Programming: JavaScript (ES6+), Python, HTML5, CSS3, SQL
-- Frameworks & Libraries: React.js, Tailwind CSS, Node.js basics, Express
-- Developer Tools: Git, GitHub, VS Code, Figma, Postman
-- Soft Skills: Team Leadership, Agile Collaboration, Presentation & Communication
-
-PROJECTS
-1. YuvaPortal - Student Resource Exchange Platform
-Built a responsive web portal allowing 500+ college peers to share lecture notes and mock tests. Implemented interactive search and local caching.
-
-2. Campus Event Tracker
-Designed a React application for college clubs to publish schedules, send SMS alerts, and track RSVPs.
-
-EXTRACURRICULAR & ACHIEVEMENTS
-- Lead Organizer, Annual Techfest 2024
-- Winner, Inter-College Web Hackathon (2nd Place out of 40 teams)
-- Active volunteer at National Youth Skill Mission (teaching digital literacy to school children)
-`,
+  resumeFileName: '',
+  resumeText: '',
   streakDays: 5,
   xpPoints: 1250,
   badges: ['First Step', 'Resume Ready', 'Fast Learner', 'Streak Pioneer'],

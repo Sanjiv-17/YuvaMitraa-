@@ -3,10 +3,12 @@ import { Home, Briefcase, BookOpen, User, Sparkles } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export const BottomNav: React.FC<{ onOpenAssistant: () => void }> = ({ onOpenAssistant }) => {
-  const { activeTab, setActiveTab, t } = useApp();
+  const { activeTab, setActiveTab, isExperienced, isRecruiter } = useApp();
+
+  const homeId = isExperienced ? 'experienced' : isRecruiter ? 'recruiter' : 'home';
 
   const items = [
-    { id: 'home', label: 'Home', icon: Home },
+    { id: homeId, label: 'Home', icon: Home },
     { id: 'learn', label: 'Learn', icon: BookOpen },
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, isAction: true },
     { id: 'opportunities', label: 'Opportunities', icon: Briefcase },

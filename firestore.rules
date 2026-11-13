@@ -21,53 +21,137 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.email == 'sanjivsanju017@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
+      return isSignedIn() &&
+        request.auth.token.admin == true &&
+        request.auth.token.email == 'sanjivsanju017@gmail.com' &&
+        request.auth.token.email_verified == true;
+    }
+
+    function isEmployerOrCollege() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['recruiter', 'college'];
     }
 
     function isValidUser(data) {
-      return data.keys().hasAll(['uid', 'name', 'role', 'createdAt']) &&
+      return data.keys().hasAll(['uid', 'role', 'email', 'createdAt']) &&
+        data.keys().hasOnly([
+          'uid', 'name', 'email', 'phone', 'role', 'college', 'department', 'branch',
+          'rollNumber', 'cgpa', 'graduationYear', 'collegeAisheCode', 'cinOrRegistrationNumber',
+          'currentRole', 'yearsOfExperience', 'location', 'age', 'createdAt', 'updatedAt'
+        ]) &&
         data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
-        data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
-        data.role in ['student', 'college', 'recruiter', 'admin'];
+        (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() <= 100)) &&
+        data.email is string && data.email.size() > 0 && data.email.size() <= 160 &&
+        data.role in ['student', 'recruiter', 'experienced', 'college', 'admin'] &&
+        data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 32)) &&
+        (!('college' in data) || (data.college is string && data.college.size() <= 200)) &&
+        (!('currentRole' in data) || (data.currentRole is string && data.currentRole.size() <= 160)) &&
+        (!('yearsOfExperience' in data) || (data.yearsOfExperience is string && data.yearsOfExperience.size() <= 64)) &&
+        (!('location' in data) || (data.location is string && data.location.size() <= 160));
     }
 
-    // User profiles - private PII isolation: users can only read and write their own profile
+    function isValidJob(data) {
+      return data.keys().hasAll(['id', 'title', 'company', 'location']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+        data.company is string && data.company.size() > 0 && data.company.size() <= 200 &&
+        data.location is string && data.location.size() > 0 && data.location.size() <= 200;
+    }
+
+    function isValidInternship(data) {
+      return data.keys().hasAll(['id', 'title', 'companyName', 'applyUrl', 'sourceName', 'verifiedStatus']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
+        data.companyName is string && data.companyName.size() > 0 && data.companyName.size() <= 200 &&
+        data.applyUrl is string && data.applyUrl.size() <= 1000 &&
+        data.sourceName is string && data.sourceName.size() <= 128 &&
+        data.verifiedStatus in ['Pending verification', 'Verified', 'Expired', 'Rejected', 'Unavailable'];
+    }
+
+    function isValidApplication(data) {
+      return data.keys().hasAll(['id', 'jobId', 'userId', 'status', 'appliedDate']) &&
+        data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
+        data.jobId is string && data.jobId.size() > 0 && data.jobId.size() <= 128 &&
+        data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
+        data.status in ['Applied', 'Under Review', 'Shortlisted', 'Interview', 'Selected', 'Rejected'] &&
+        data.appliedDate is string && data.appliedDate.size() > 0 && data.appliedDate.size() <= 64;
+    }
+
+    // User profiles - private PII isolation; users cannot select admin on signup or edit their own role field
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
       allow list: if isAdmin();
-      allow create: if isOwner(userId) && isValidId(userId) && isValidUser(request.resource.data) && request.resource.data.uid == userId;
-      allow update: if (isOwner(userId) || isAdmin()) && isValidId(userId) && isValidUser(request.resource.data) && request.resource.data.uid == userId;
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.uid == userId &&
+        (request.resource.data.role in ['student', 'recruiter', 'experienced'] || isAdmin());
+      allow update: if (isOwner(userId) || isAdmin()) &&
+        isValidId(userId) &&
+        isValidUser(request.resource.data) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (
+          isAdmin() ||
+          (
+            request.resource.data.role == resource.data.role &&
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'uid', 'createdAt'])
+          )
+        );
       allow delete: if isOwner(userId) || isAdmin();
     }
 
-    // Jobs catalog - public read for signed-in users, write restricted to recruiters, colleges & admin
+    // Admin registry and admin-only data - strictly requires verified Firebase custom claim (admin: true)
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /adminData/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Jobs catalog - read for signed-in users, write restricted to verified recruiters, colleges & admin
     match /jobs/{jobId} {
       allow get, list: if isSignedIn();
-      allow create, update, delete: if isSignedIn() && (isAdmin() || request.auth.token.role in ['recruiter', 'college']);
+      allow create, update: if isValidId(jobId) &&
+        (isAdmin() || isEmployerOrCollege()) &&
+        isValidJob(request.resource.data) &&
+        request.resource.data.id == jobId;
+      allow delete: if isAdmin() || isEmployerOrCollege();
     }
 
-    // Genuine Internships collection - public read for signed-in users, write restricted to admin & authorized adapters
+    // Genuine Internships collection - read for signed-in users, write restricted to admin & recruiters/colleges
     match /internships/{internshipId} {
       allow get, list: if isSignedIn();
-      allow create, update, delete: if isSignedIn() && (isAdmin() || request.auth.token.role in ['recruiter', 'college']);
+      allow create, update: if isValidId(internshipId) &&
+        (isAdmin() || isEmployerOrCollege()) &&
+        isValidInternship(request.resource.data) &&
+        request.resource.data.id == internshipId;
+      allow delete: if isAdmin() || isEmployerOrCollege();
     }
 
-    // Job applications - candidate can read/create their own, admin and recruiter can read
+    // Job applications - candidate can read/create their own, admin can manage
     match /applications/{applicationId} {
-      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow get, list: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isSignedIn() &&
+        isValidId(applicationId) &&
+        isValidApplication(request.resource.data) &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() &&
+        isValidId(applicationId) &&
+        (resource.data.userId == request.auth.uid || isAdmin()) &&
+        isValidApplication(request.resource.data) &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.jobId == resource.data.jobId;
       allow delete: if isSignedIn() && (resource.data.userId == request.auth.uid || isAdmin());
     }
 
-    // Data sync logs - readable by admin
+    // Data sync logs - readable and writable only by admin
     match /dataSyncLogs/{logId} {
-      allow get, list: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     // Health check connection test document

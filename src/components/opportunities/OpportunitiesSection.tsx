@@ -110,7 +110,7 @@ export const OpportunitiesSection: React.FC<{ initialSubTab?: 'jobs' | 'schemes'
         {activeSubTab === 'applications' && <ApplicationTracker />}
         {activeSubTab === 'saved' && (
           <div className="space-y-4">
-            <JobFinder />
+            <JobFinder savedOnly />
           </div>
         )}
       </div>

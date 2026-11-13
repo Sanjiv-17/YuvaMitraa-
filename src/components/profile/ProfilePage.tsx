@@ -99,6 +99,8 @@ export const ProfilePage: React.FC = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [showLogoutAllModal, setShowLogoutAllModal] = useState(false);
+  const [logoutAllLoading, setLogoutAllLoading] = useState(false);
 
   const avatarPresets = [
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
@@ -289,15 +291,22 @@ export const ProfilePage: React.FC = () => {
   };
 
   // Logout from all devices
-  const handleLogoutAll = async () => {
-    if (!confirm('Are you sure you want to log out from all devices? You will need to sign in again.')) return;
+  const handleLogoutAll = () => {
+    setShowLogoutAllModal(true);
+  };
+
+  const confirmLogoutAll = async () => {
+    setLogoutAllLoading(true);
     try {
       if (authToken) {
         await logoutAllApi(authToken);
       }
       logout();
-    } catch (err) {
+    } catch {
       logout();
+    } finally {
+      setLogoutAllLoading(false);
+      setShowLogoutAllModal(false);
     }
   };
 
@@ -1081,6 +1090,38 @@ export const ProfilePage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* LOGOUT ALL DEVICES CONFIRMATION MODAL */}
+      {showLogoutAllModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl">
+            <div className="flex items-center gap-3 text-[#FF7A00] mb-3">
+              <LogOut className="w-6 h-6" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Log Out From All Devices</h3>
+            </div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 mb-4 leading-relaxed">
+              Are you sure you want to log out from all active sessions? You will need to sign in again on this device.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLogoutAllModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={logoutAllLoading}
+                onClick={confirmLogoutAll}
+                className="px-5 py-2 text-xs font-bold bg-[#FF7A00] hover:bg-[#E06900] text-white rounded-xl shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {logoutAllLoading ? 'Signing Out...' : 'Log Out All Devices'}
+              </button>
+            </div>
           </div>
         </div>
       )}

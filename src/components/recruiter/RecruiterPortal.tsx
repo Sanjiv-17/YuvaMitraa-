@@ -33,6 +33,7 @@ export const RecruiterPortal: React.FC = () => {
   const [selectedApplicantResume, setSelectedApplicantResume] = useState<Application | null>(null);
   const [schedulingInterviewApp, setSchedulingInterviewApp] = useState<Application | null>(null);
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
+  const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
 
   // Search & filter for applicants
   const [applicantSearch, setApplicantSearch] = useState('');
@@ -486,11 +487,7 @@ export const RecruiterPortal: React.FC = () => {
                     <span>Update</span>
                   </button>
                   <button
-                    onClick={() => {
-                      if (window.confirm(`Are you sure you want to remove "${job.title}"?`)) {
-                        deleteJob(job.id);
-                      }
-                    }}
+                    onClick={() => setJobToDelete(job)}
                     className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:text-rose-700 transition-colors cursor-pointer"
                     title="Delete Job"
                   >
@@ -826,6 +823,37 @@ ACADEMIC EXCELLENCE & HANDS-ON PROJECTS:
                 className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 text-slate-800 dark:text-white font-bold text-xs"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Job Confirmation Modal */}
+      {jobToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Remove Opportunity</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Are you sure you want to remove <span className="font-bold text-slate-900 dark:text-white">&quot;{jobToDelete.title}&quot;</span>? Existing applicants will remain in your dashboard records.
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setJobToDelete(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:text-slate-900 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  deleteJob(jobToDelete.id);
+                  setJobToDelete(null);
+                }}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
+              >
+                Remove Listing
               </button>
             </div>
           </div>

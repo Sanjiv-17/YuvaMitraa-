@@ -23,8 +23,16 @@
         },
         "role": {
           "type": "string",
-          "enum": ["student", "college", "recruiter", "admin"],
+          "enum": ["student", "recruiter", "experienced", "college", "admin"],
           "description": "User role on YuvaMitraa"
+        },
+        "currentRole": {
+          "type": "string",
+          "description": "Current or previous professional role for experienced candidates"
+        },
+        "yearsOfExperience": {
+          "type": "string",
+          "description": "Years of professional work experience"
         },
         "college": {
           "type": "string",
@@ -75,7 +83,7 @@
           "description": "ISO timestamp of last profile update"
         }
       },
-      "required": ["uid", "name", "role", "createdAt"]
+      "required": ["uid", "role", "email", "createdAt"]
     },
     "Job": {
       "title": "Job",

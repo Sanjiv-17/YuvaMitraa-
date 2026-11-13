@@ -27,6 +27,12 @@ import {
   fetchNotificationsApi,
   markNotificationReadApi
 } from '../services/api';
+import {
+  auth,
+  onAuthStateChanged,
+  getFirebaseCustomClaims,
+  signOutUser
+} from '../services/firebase';
 
 interface AppContextType {
   user: UserProfile;
@@ -61,11 +67,11 @@ interface AppContextType {
   refreshUserLocation: () => Promise<boolean>;
   calculateDistance: (coords: { lat: number; lng: number }) => number;
   isRecruiter: boolean;
+  isExperienced: boolean;
   isCollege: boolean;
   isAdmin: boolean;
+  hasVerifiedAdminClaim: boolean;
   role: UserRole;
-  switchRoleMode: (targetRole: UserRole) => void;
-  toggleRecruiterMode: () => void;
   t: (key: string) => string;
   isFirstLaunch: boolean;
   dismissFirstLaunch: () => void;
@@ -103,48 +109,9 @@ function computeHaversineDistance(lat1: number, lon1: number, lat2: number, lon2
   return Math.round(R * c * 10) / 10;
 }
 
-const INITIAL_APPLICATIONS: Application[] = [
-  {
-    id: 'app-1',
-    jobId: 'job-1',
-    jobTitle: 'Frontend React Developer Intern',
-    company: 'BharatTech Innovations',
-    candidateName: 'Aarav Sharma',
-    candidateEmail: 'aarav.sharma@example.com',
-    candidatePhone: '+91 98765 43210',
-    candidateSkills: ['React', 'JavaScript', 'Tailwind CSS', 'Git'],
-    status: 'Shortlisted',
-    appliedDate: '2026-11-04',
-    coverLetter: 'I have hands-on experience building fast React interfaces and student platforms like YuvaPortal. I am eager to contribute to financial inclusion products.',
-    matchScore: 92,
-  },
-  {
-    id: 'app-2',
-    jobId: 'job-6',
-    jobTitle: 'Government Internship Scheme Fellow (Youth Development)',
-    company: 'Ministry of Corporate Affairs / Youth Mission',
-    candidateName: 'Aarav Sharma',
-    candidateEmail: 'aarav.sharma@example.com',
-    status: 'Applied',
-    appliedDate: '2026-11-05',
-    coverLetter: 'Passionate about public service and youth empowerment. Willing to lead ground tracking in New Delhi.',
-    matchScore: 85,
-  }
-];
+const INITIAL_APPLICATIONS: Application[] = [];
 
-const INITIAL_CERTIFICATES: Certificate[] = [
-  {
-    id: 'cert-1',
-    certificateCode: 'YM-2026-9482',
-    studentName: 'Aarav Sharma',
-    courseId: 'course-2',
-    courseTitle: 'Business Communication & Workplace Presentation Skills',
-    issueDate: '2026-10-28',
-    scorePercentage: 94,
-    qrData: 'https://yuvamitraa.gov.in/verify/YM-2026-9482',
-    instructor: 'Pooja Iyer (Corporate Soft Skills Coach)'
-  }
-];
+const INITIAL_CERTIFICATES: Certificate[] = [];
 
 export function normalizeUserProfile(rawUser: any): UserProfile {
   if (!rawUser) return INITIAL_USER;
@@ -187,18 +154,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedCourseForPlayer, setSelectedCourseForPlayer] = useState<Course | null>(null);
   
   const [jobs, setJobs] = useState<Job[]>(() => {
-    const saved = localStorage.getItem('ym_jobs');
-    return saved ? JSON.parse(saved) : SAMPLE_JOBS;
+    try {
+      const saved = localStorage.getItem('ym_jobs');
+      return saved ? JSON.parse(saved) : SAMPLE_JOBS;
+    } catch {
+      return SAMPLE_JOBS;
+    }
   });
 
   const [applications, setApplications] = useState<Application[]>(() => {
-    const saved = localStorage.getItem('ym_applications');
-    return saved ? JSON.parse(saved) : INITIAL_APPLICATIONS;
+    try {
+      const saved = localStorage.getItem('ym_applications');
+      return saved ? JSON.parse(saved) : INITIAL_APPLICATIONS;
+    } catch {
+      return INITIAL_APPLICATIONS;
+    }
   });
 
   const [certificates, setCertificates] = useState<Certificate[]>(() => {
-    const saved = localStorage.getItem('ym_certificates');
-    return saved ? JSON.parse(saved) : INITIAL_CERTIFICATES;
+    try {
+      const saved = localStorage.getItem('ym_certificates');
+      return saved ? JSON.parse(saved) : INITIAL_CERTIFICATES;
+    } catch {
+      return INITIAL_CERTIFICATES;
+    }
   });
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -210,8 +189,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number }>(() => {
-    const saved = localStorage.getItem('ym_location');
-    return saved ? JSON.parse(saved) : { lat: 28.6315, lng: 77.2167 }; // New Delhi default
+    try {
+      const saved = localStorage.getItem('ym_location');
+      return saved ? JSON.parse(saved) : { lat: 28.6315, lng: 77.2167 }; // New Delhi default
+    } catch {
+      return { lat: 28.6315, lng: 77.2167 };
+    }
   });
 
   // Viewport mode: desktop (full responsive) vs mobile (exact phone frame)
@@ -236,10 +219,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'forgot'>('login');
 
+  const [hasVerifiedAdminClaim, setHasVerifiedAdminClaim] = useState<boolean>(false);
+
   const isAuthenticated = Boolean(authToken && user);
   const isRecruiter = user.role === 'recruiter';
+  const isExperienced = user.role === 'experienced';
   const isCollege = user.role === 'college';
-  const isAdmin = user.role === 'admin';
+  const isAdmin = user.role === 'admin' && hasVerifiedAdminClaim;
   const role = user.role;
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([
@@ -354,7 +340,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [fontSize]);
 
   const updateUser = (updated: Partial<UserProfile>) => {
-    setUser(prev => normalizeUserProfile({ ...prev, ...updated }));
+    setUser(prev => {
+      // Never allow profile edits to escalate or mutate user role
+      const { role: _ignoredRole, ...safeUpdates } = updated;
+      return normalizeUserProfile({ ...prev, ...safeUpdates });
+    });
   };
 
   const setLanguage = (lang: Language) => {
@@ -373,24 +363,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFontSizeState(size);
   };
 
-  const switchRoleMode = (targetRole: UserRole) => {
-    updateUser({ role: targetRole });
-    if (targetRole === 'admin') {
-      setActiveTab('admin');
-    } else if (targetRole === 'recruiter') {
-      setActiveTab('recruiter');
-    } else if (targetRole === 'college') {
-      setActiveTab('college');
-    } else {
-      setActiveTab('home');
-    }
-  };
-
-  const toggleRecruiterMode = () => {
-    const nextRole: UserRole = user.role === 'recruiter' ? 'student' : 'recruiter';
-    switchRoleMode(nextRole);
-  };
-
   const login = (token: string, newUser: UserProfile) => {
     const normalized = normalizeUserProfile(newUser);
     setAuthToken(token);
@@ -406,14 +378,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
     setIsAuthModalOpen(false);
 
-    // Automatically redirect users to their respective dashboards
+    // Automatically redirect users to their respective dashboards based on Firestore/server role
     if (normalized.role === 'admin') {
+      setHasVerifiedAdminClaim(true);
       setActiveTab('admin');
     } else if (normalized.role === 'recruiter') {
+      setHasVerifiedAdminClaim(false);
       setActiveTab('recruiter');
+    } else if (normalized.role === 'experienced') {
+      setHasVerifiedAdminClaim(false);
+      setActiveTab('experienced');
     } else if (normalized.role === 'college') {
+      setHasVerifiedAdminClaim(false);
       setActiveTab('college');
     } else {
+      setHasVerifiedAdminClaim(false);
       setActiveTab('home');
     }
   };
@@ -422,9 +401,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (authToken) {
       logoutApi(authToken);
     }
+    signOutUser();
     setAuthToken(null);
+    setHasVerifiedAdminClaim(false);
     localStorage.removeItem('ym_auth_token');
+    localStorage.removeItem('ym_user');
     setActiveTab('home');
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+      window.history.replaceState({}, '', '/');
+    }
   };
 
   const openAuthModal = (mode: 'login' | 'register' | 'forgot' = 'login') => {
@@ -436,19 +421,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setIsAuthModalOpen(false);
   };
 
+  // Monitor Firebase Auth custom claims (strict server-verified admin claim check)
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser && fbUser.emailVerified) {
+        try {
+          const claims = await getFirebaseCustomClaims(false);
+          setHasVerifiedAdminClaim(claims.admin === true);
+        } catch {
+          setHasVerifiedAdminClaim(false);
+        }
+      } else {
+        setHasVerifiedAdminClaim(false);
+      }
+    });
+    return () => unsub();
+  }, []);
+
   // Restore session token on load
   useEffect(() => {
     const savedToken = localStorage.getItem('ym_auth_token');
     if (savedToken && savedToken !== 'token-demo-session') {
       fetchCurrentUserApi(savedToken)
-        .then(data => {
+        .then(async (data) => {
           if (data?.user) {
-            setUser(normalizeUserProfile(data.user));
+            const restored = normalizeUserProfile(data.user);
+            if (restored.role === 'admin') {
+              // Admin session also requires verified Firebase custom claim on current auth user
+              const fbUser = auth.currentUser;
+              if (fbUser && fbUser.emailVerified) {
+                const claims = await getFirebaseCustomClaims(false).catch(() => ({}));
+                if ((claims as any).admin === true) {
+                  setHasVerifiedAdminClaim(true);
+                  setUser(restored);
+                  setActiveTab('admin');
+                  return;
+                }
+              }
+              // Even if Firebase client hasn't finished restoring, token came from server /api/auth/admin-verify
+              setUser(restored);
+              return;
+            }
+            setUser(restored);
+            if (restored.role === 'recruiter') {
+              setActiveTab('recruiter');
+            } else if (restored.role === 'experienced') {
+              setActiveTab('experienced');
+            } else if (restored.role === 'college') {
+              setActiveTab('college');
+            }
           }
         })
         .catch(() => {
           localStorage.removeItem('ym_auth_token');
           setAuthToken(null);
+          setHasVerifiedAdminClaim(false);
         });
     }
   }, []);
@@ -698,11 +725,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshUserLocation,
         calculateDistance,
         isRecruiter,
+        isExperienced,
         isCollege,
         isAdmin,
+        hasVerifiedAdminClaim,
         role,
-        switchRoleMode,
-        toggleRecruiterMode,
         t,
         isFirstLaunch,
         dismissFirstLaunch,

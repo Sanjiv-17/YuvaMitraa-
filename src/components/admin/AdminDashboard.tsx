@@ -90,6 +90,7 @@ export const AdminDashboard: React.FC = () => {
   const [activeAdminTab, setActiveAdminTab] = useState<'overview' | 'integrations' | 'verifications' | 'users' | 'jobs' | 'courses' | 'applications' | 'reported' | 'security'>('overview');
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
 
   // New Job Modal Form State
   const [showAddJobModal, setShowAddJobModal] = useState(false);
@@ -459,7 +460,7 @@ export const AdminDashboard: React.FC = () => {
                   <span className="font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">Operational (SHA-256)</span>
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-2xl bg-sky-50/60 dark:bg-sky-950/40 border border-sky-200 text-xs">
-                  <span className="font-semibold text-sky-900 dark:text-sky-200">Gemini 3.8 Flash AI Assistant</span>
+                  <span className="font-semibold text-sky-900 dark:text-sky-200">Gemini 4 Hydrogen AI Assistant</span>
                   <span className="font-bold text-sky-700 bg-sky-100 px-2 py-0.5 rounded-md">Connected (Server-Side)</span>
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/40 border border-amber-200 text-xs">
@@ -999,13 +1000,7 @@ export const AdminDashboard: React.FC = () => {
 
                 <div className="flex items-center gap-2 shrink-0">
                   <button
-                    onClick={() => {
-                      if (confirm(`Remove "${job.title}" from live listings?`)) {
-                        deleteJob(job.id);
-                        setStatusMsg(`Removed "${job.title}"`);
-                        setTimeout(() => setStatusMsg(null), 2500);
-                      }
-                    }}
+                    onClick={() => setJobToDelete(job)}
                     className="p-2 text-rose-600 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors cursor-pointer"
                     title="Delete Job"
                   >
@@ -1400,6 +1395,40 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Job Confirmation Modal */}
+      {jobToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-md w-full border border-slate-200 dark:border-slate-700 shadow-2xl space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Remove Live Listing</h3>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Remove <span className="font-bold text-slate-900 dark:text-white">&quot;{jobToDelete.title}&quot;</span> from live listings?
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setJobToDelete(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-500 hover:text-slate-700 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const deletedTitle = jobToDelete.title;
+                  deleteJob(jobToDelete.id);
+                  setJobToDelete(null);
+                  setStatusMsg(`Removed "${deletedTitle}"`);
+                  setTimeout(() => setStatusMsg(null), 2500);
+                }}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
+              >
+                Remove Listing
+              </button>
+            </div>
           </div>
         </div>
       )}

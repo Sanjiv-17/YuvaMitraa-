@@ -593,7 +593,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-50 dark:bg-orange-950/40 text-[#FF7A00] text-xs font-semibold uppercase tracking-wider mb-2">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Gemini 3.8 Flash • AI Career Mentor</span>
+              <span>Gemini 4 Hydrogen • AI Career Mentor</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <span>YuvaMitraa AI Career Mentor</span>

@@ -31,10 +31,9 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
     darkMode, 
     toggleDarkMode, 
     isRecruiter, 
+    isExperienced,
     isCollege,
     isAdmin,
-    switchRoleMode,
-    toggleRecruiterMode,
     notifications,
     markNotificationRead,
     setActiveTab,
@@ -70,7 +69,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
         
         {/* Brand Logo & Tagline */}
         <div 
-          onClick={() => setActiveTab('home')}
+          onClick={() => setActiveTab(isAdmin ? 'admin' : isRecruiter ? 'recruiter' : isExperienced ? 'experienced' : 'home')}
           className="flex items-center gap-2.5 cursor-pointer shrink-0 group"
         >
           <img
@@ -111,8 +110,8 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
         {/* Right Navigation & Utility Actions */}
         <div className="flex items-center gap-2 sm:gap-3">
           
-          {/* User Role Quick Badge & Switcher */}
-          {user.role === 'admin' ? (
+          {/* User Role Quick Badge */}
+          {isAdmin ? (
             <button
               onClick={() => setActiveTab('admin')}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition-all shadow-xs cursor-pointer"
@@ -120,7 +119,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span>Admin Center</span>
             </button>
-          ) : user.role === 'college' ? (
+          ) : isCollege ? (
             <button
               onClick={() => setActiveTab('college')}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 transition-all cursor-pointer"
@@ -135,6 +134,14 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
             >
               <Building2 className="w-3.5 h-3.5" />
               <span>Recruiter Portal</span>
+            </button>
+          ) : isExperienced ? (
+            <button
+              onClick={() => setActiveTab('experienced')}
+              className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-all cursor-pointer"
+            >
+              <Briefcase className="w-3.5 h-3.5" />
+              <span>Experienced Hub</span>
             </button>
           ) : (
             <button
@@ -296,7 +303,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
               />
               <div className="flex flex-col text-left hidden sm:block">
                 <span className="text-xs font-bold text-slate-700 max-w-[80px] truncate leading-tight block">
-                  {user.name.split(' ')[0]}
+                  {(user?.name || 'Member').split(' ')[0]}
                 </span>
                 <span className="text-[9px] font-extrabold uppercase text-[#FF7A00] tracking-wider block">
                   {user.role}
@@ -328,7 +335,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                   </div>
                 </div>
 
-                {user.role === 'admin' && (
+                {isAdmin && (
                   <button
                     onClick={() => {
                       setActiveTab('admin');
@@ -341,7 +348,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                   </button>
                 )}
 
-                {user.role === 'college' && (
+                {isCollege && (
                   <button
                     onClick={() => {
                       setActiveTab('college');
@@ -354,7 +361,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                   </button>
                 )}
 
-                {user.role === 'recruiter' && (
+                {isRecruiter && (
                   <button
                     onClick={() => {
                       setActiveTab('recruiter');
@@ -367,38 +374,18 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                   </button>
                 )}
 
-                {/* Quick Persona Switcher for Evaluation */}
-                <div className="px-3.5 py-2 bg-slate-50 border-y border-slate-100">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                    View Perspective
-                  </span>
-                  <div className="grid grid-cols-2 gap-1 text-[11px] font-semibold">
-                    <button
-                      onClick={() => { switchRoleMode('student'); setShowUserMenu(false); }}
-                      className={`px-2 py-1 rounded text-left ${user.role === 'student' ? 'bg-emerald-600 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
-                    >
-                      🎓 Student
-                    </button>
-                    <button
-                      onClick={() => { switchRoleMode('college'); setShowUserMenu(false); }}
-                      className={`px-2 py-1 rounded text-left ${user.role === 'college' ? 'bg-orange-600 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
-                    >
-                      🏛️ College
-                    </button>
-                    <button
-                      onClick={() => { switchRoleMode('recruiter'); setShowUserMenu(false); }}
-                      className={`px-2 py-1 rounded text-left ${user.role === 'recruiter' ? 'bg-purple-600 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
-                    >
-                      🏢 Recruiter
-                    </button>
-                    <button
-                      onClick={() => { switchRoleMode('admin'); setShowUserMenu(false); }}
-                      className={`px-2 py-1 rounded text-left ${user.role === 'admin' ? 'bg-slate-900 text-white font-bold' : 'hover:bg-slate-200 text-slate-700'}`}
-                    >
-                      🛡️ Admin
-                    </button>
-                  </div>
-                </div>
+                {isExperienced && (
+                  <button
+                    onClick={() => {
+                      setActiveTab('experienced');
+                      setShowUserMenu(false);
+                    }}
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center gap-2"
+                  >
+                    <Briefcase className="w-3.5 h-3.5 text-[#FF7A00]" />
+                    <span>Experienced Career Hub</span>
+                  </button>
+                )}
 
                 <button
                   onClick={() => {

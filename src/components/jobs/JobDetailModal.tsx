@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   X, 
   Sparkles, 
@@ -40,16 +40,26 @@ export const JobDetailModal: React.FC = () => {
   const [isCheckingAI, setIsCheckingAI] = useState(false);
   const [eligibilityResult, setEligibilityResult] = useState<EligibilityResult | null>(null);
   const [isApplying, setIsApplying] = useState(false);
-  const [coverLetter, setCoverLetter] = useState(
-    `Hello ${selectedJobForDetail?.company || 'Team'}, I am excited to apply for the ${selectedJobForDetail?.title} position. With my background in ${user?.education || 'relevant coursework'} and skills in ${(user?.skills || []).slice(0, 3).join(', ') || 'practical technologies'}, I am confident in adding real value to your projects.`
-  );
+  const [coverLetter, setCoverLetter] = useState('');
   const [appliedSuccess, setAppliedSuccess] = useState(false);
   const [applyErrorMessage, setApplyErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (selectedJobForDetail) {
+      setCoverLetter(
+        `Hello ${selectedJobForDetail.company || 'Team'}, I am excited to apply for the ${selectedJobForDetail.title} position. With my background in ${user?.education || 'relevant coursework'} and skills in ${(user?.skills || []).slice(0, 3).join(', ') || 'practical technologies'}, I am confident in adding real value to your projects.`
+      );
+      setEligibilityResult(null);
+      setIsApplying(false);
+      setAppliedSuccess(false);
+      setApplyErrorMessage(null);
+    }
+  }, [selectedJobForDetail?.id]);
 
   if (!selectedJobForDetail) return null;
 
   const job = selectedJobForDetail;
-  const isSaved = savedJobIds.includes(job.id);
+  const isSaved = (savedJobIds || []).includes(job.id);
   const distance = calculateDistance(job.coordinates);
 
   const handleRunEligibility = async () => {
@@ -168,7 +178,7 @@ export const JobDetailModal: React.FC = () => {
                     AI Resume & Skill Eligibility Checker
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    Instant comparison against resume: <span className="font-semibold text-slate-700">{user.resumeFileName}</span>
+                    Instant comparison against resume: <span className="font-semibold text-slate-700">{user?.resumeFileName || 'Profile Resume'}</span>
                   </p>
                 </div>
               </div>
@@ -239,10 +249,10 @@ export const JobDetailModal: React.FC = () => {
                   <div className="bg-white p-3 rounded-xl border border-emerald-100">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 mb-2">
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>Matched Skills ({eligibilityResult.matchedSkills.length})</span>
+                      <span>Matched Skills ({(eligibilityResult.matchedSkills || []).length})</span>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {eligibilityResult.matchedSkills.map((s, i) => (
+                      {(eligibilityResult.matchedSkills || []).map((s, i) => (
                         <span key={i} className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-md font-medium">
                           {s}
                         </span>
@@ -253,10 +263,10 @@ export const JobDetailModal: React.FC = () => {
                   <div className="bg-white p-3 rounded-xl border border-amber-100">
                     <div className="flex items-center gap-1.5 text-xs font-bold text-amber-700 mb-2">
                       <AlertCircle className="w-4 h-4" />
-                      <span>Missing Skills to Learn ({eligibilityResult.missingSkills.length})</span>
+                      <span>Missing Skills to Learn ({(eligibilityResult.missingSkills || []).length})</span>
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {eligibilityResult.missingSkills.map((s, i) => (
+                      {(eligibilityResult.missingSkills || []).map((s, i) => (
                         <span key={i} className="text-[10px] bg-amber-50 text-amber-700 px-2 py-0.5 rounded-md font-medium">
                           {s}
                         </span>
@@ -271,7 +281,7 @@ export const JobDetailModal: React.FC = () => {
                     💡 Gemini AI Actionable Suggestions:
                   </div>
                   <ul className="space-y-1 text-xs text-slate-600 list-disc list-inside">
-                    {eligibilityResult.suggestions.map((sug, sIdx) => (
+                    {(eligibilityResult.suggestions || []).map((sug, sIdx) => (
                       <li key={sIdx}>{sug}</li>
                     ))}
                   </ul>
@@ -332,7 +342,7 @@ export const JobDetailModal: React.FC = () => {
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-slate-900">Key Responsibilities</h3>
             <ul className="space-y-1.5 text-xs text-slate-600">
-              {job.responsibilities.map((r, i) => (
+              {(job.responsibilities || []).map((r, i) => (
                 <li key={i} className="flex items-start gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#FF7A00] mt-1.5 shrink-0" />
                   <span>{r}</span>
@@ -344,7 +354,7 @@ export const JobDetailModal: React.FC = () => {
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-slate-900">Required Skills</h3>
             <div className="flex flex-wrap gap-1.5">
-              {job.requiredSkills.map((sk, i) => (
+              {(job.requiredSkills || []).map((sk, i) => (
                 <span key={i} className="text-xs font-medium bg-slate-100 text-slate-700 px-3 py-1 rounded-lg">
                   {sk}
                 </span>
@@ -355,7 +365,7 @@ export const JobDetailModal: React.FC = () => {
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-slate-900">Perks & Benefits</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {job.perks.map((p, i) => (
+              {(job.perks || []).map((p, i) => (
                 <div key={i} className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                   <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                   <span>{p}</span>

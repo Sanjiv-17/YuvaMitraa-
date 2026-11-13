@@ -17,10 +17,10 @@ import { askStudyAssistant } from '../../services/api';
 
 export const FloatingChat: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
   const { language, user } = useApp();
-  const [messages, setMessages] = useState<Array<{ sender: 'user' | 'assistant'; text: string; time: string }>>([
+  const [messages, setMessages] = useState<Array<{ id?: string; sender: 'user' | 'assistant'; text: string; time: string }>>([
     {
       sender: 'assistant',
-      text: `Namaste ${user.name.split(' ')[0]}! 🙏 I am your YuvaMitraa AI Study & Career Mentor. How can I help you skill up today? You can ask about internship preparation, syllabus doubts, interview practice, or government schemes.`,
+      text: `Namaste ${(user?.name || 'Student').split(' ')[0]}! 🙏 I am your YuvaMitraa AI Study & Career Mentor. How can I help you skill up today? You can ask about internship preparation, syllabus doubts, interview practice, or government schemes.`,
       time: 'Just now'
     }
   ]);
@@ -49,7 +49,7 @@ export const FloatingChat: React.FC<{ isOpen: boolean; onClose: () => void }> = 
       const recognition = new SpeechRecognition();
       recognition.continuous = false;
       recognition.interimResults = false;
-      recognition.lang = language === 'Hindi' ? 'hi-IN' : 'en-IN';
+      recognition.lang = language === 'Kannada' ? 'kn-IN' : language === 'Hindi' ? 'hi-IN' : 'en-IN';
 
       recognition.onresult = (event: any) => {
         const transcript = event.results[0][0].transcript;
@@ -106,7 +106,7 @@ export const FloatingChat: React.FC<{ isOpen: boolean; onClose: () => void }> = 
       }
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = language === 'Hindi' ? 'hi-IN' : 'en-IN';
+      utterance.lang = language === 'Kannada' ? 'kn-IN' : language === 'Hindi' ? 'hi-IN' : 'en-IN';
       utterance.rate = 1.0;
       utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = () => setIsSpeaking(false);
@@ -136,10 +136,10 @@ export const FloatingChat: React.FC<{ isOpen: boolean; onClose: () => void }> = 
         history,
         language,
         {
-          name: user.name,
-          education: user.education,
-          skills: user.skills,
-          location: user.location
+          name: user?.name || 'Student',
+          education: user?.education || 'Undergraduate',
+          skills: user?.skills || [],
+          location: user?.location || 'India'
         }
       );
 

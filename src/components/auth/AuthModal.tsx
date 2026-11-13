@@ -33,8 +33,9 @@ import {
   resendOtpApi, 
   forgotPasswordInitApi, 
   resetPasswordApi, 
-  googleSignInApi 
+  firebaseLoginApi 
 } from '../../services/api';
+import { signInWithGoogle, getUserProfileFromFirestore, syncUserProfileToFirestore } from '../../services/firebase';
 
 interface RememberedAccount {
   name: string;
@@ -74,12 +75,14 @@ export const AuthModal: React.FC = () => {
   const [regMobile, setRegMobile] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
-  const [regRole, setRegRole] = useState<'student' | 'recruiter'>('student');
-  const [regCollege, setRegCollege] = useState('Delhi Technological University');
-  const [regCourse, setRegCourse] = useState('B.Tech in Computer Science & Engineering');
+  const [regRole, setRegRole] = useState<'student' | 'recruiter' | 'experienced'>('student');
+  const [regCollege, setRegCollege] = useState('');
+  const [regCourse, setRegCourse] = useState('');
   const [regStudyYear, setRegStudyYear] = useState('3rd Year');
   const [regCompany, setRegCompany] = useState('');
   const [regDesignation, setRegDesignation] = useState('');
+  const [regCurrentRole, setRegCurrentRole] = useState('');
+  const [regYearsExperience, setRegYearsExperience] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(true);
 
   // Registration & General OTP states
@@ -179,27 +182,7 @@ export const AuthModal: React.FC = () => {
     return { score: 100, label: 'Strong & Secure', color: 'bg-emerald-500', text: 'text-emerald-600' };
   };
 
-  // Quick Demo Account Autofill
-  const handleAutofillDemo = (role: 'student' | 'recruiter' | 'admin') => {
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    setMode('login');
-    setLoginMethod('password');
-    setLoginOtpSent(false);
-
-    if (role === 'student') {
-      setLoginIdentifier('aarav.sharma@example.com');
-      setLoginPassword('Student@123');
-    } else if (role === 'recruiter') {
-      setLoginIdentifier('recruiter@bharattech.com');
-      setLoginPassword('Recruiter@123');
-    } else {
-      setLoginIdentifier('admin@yuvamitraa.gov.in');
-      setLoginPassword('Admin@123');
-    }
-  };
-
-  // Use Remembered Account for 1-Click login
+  // Use Remembered Account for 1-Click email prefill
   const handleUseRemembered = () => {
     if (!rememberedAccount) return;
     setLoginIdentifier(rememberedAccount.email || rememberedAccount.phone || '');
@@ -282,19 +265,44 @@ export const AuthModal: React.FC = () => {
     }
   };
 
-  // 2. Handle Google Sign-In
+  // 2. Handle Google Sign-In via Firebase Auth
   const handleGoogleSignIn = async () => {
     setErrorMsg(null);
     setIsLoading(true);
     try {
-      const email = 'google.student@yuvamitraa.org';
-      const name = 'Aaditya Sen';
-      const photoUrl = 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=400&q=80';
-      const data = await googleSignInApi(email, name, photoUrl);
+      const result: any = await signInWithGoogle();
+      if (!result?.user) {
+        setIsLoading(false);
+        return;
+      }
+      const fbUser = result.user;
+      const email = (fbUser.email || '').toLowerCase();
+      const name = fbUser.displayName || (email ? email.split('@')[0] : 'Yuva Member');
+      const photoUrl = fbUser.photoURL || '';
+      const firestoreProfile = await getUserProfileFromFirestore(fbUser.uid).catch(() => null);
+      const resolvedRole = firestoreProfile?.role || 'student';
+      if (resolvedRole !== 'student' && resolvedRole !== 'recruiter' && resolvedRole !== 'experienced') {
+        throw new Error('Unauthorized role for public sign-in.');
+      }
+      if (!firestoreProfile) {
+        await syncUserProfileToFirestore(fbUser.uid, {
+          name,
+          email,
+          role: 'student',
+          createdAt: new Date().toISOString(),
+        }).catch(() => {});
+      }
+      const data = await firebaseLoginApi({
+        firebaseUid: fbUser.uid,
+        email,
+        name: firestoreProfile?.name || name,
+        role: resolvedRole,
+        photoUrl,
+      });
       setSuccessMsg('Google authentication verified! Redirecting to dashboard...');
       setTimeout(() => {
-        login(data.token, data.user);
-      }, 700);
+        login(data.token, { ...data.user, role: resolvedRole });
+      }, 400);
     } catch (err: any) {
       setErrorMsg(err.message || 'Google Sign-In failed.');
     } finally {
@@ -341,6 +349,8 @@ export const AuthModal: React.FC = () => {
         studyYear: regRole === 'student' ? regStudyYear : undefined,
         companyName: regRole === 'recruiter' ? regCompany : undefined,
         designation: regRole === 'recruiter' ? regDesignation : undefined,
+        currentRole: regRole === 'experienced' ? regCurrentRole : undefined,
+        yearsOfExperience: regRole === 'experienced' ? regYearsExperience : undefined,
       });
 
       setOtpTarget(regEmail);
@@ -667,45 +677,6 @@ export const AuthModal: React.FC = () => {
             </div>
           )}
 
-          {/* 1-Click Role Switcher Demo Cards */}
-          {mode === 'login' && !loginOtpSent && (
-            <div className="bg-orange-50/60 p-3 rounded-2xl border border-orange-200/70 space-y-2">
-              <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                <span className="flex items-center gap-1.5 text-[#FF7A00]">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>1-Click Role Test Accounts:</span>
-                </span>
-                <span className="text-[10px] text-slate-400 font-normal">Pre-loads live credentials</span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => handleAutofillDemo('student')}
-                  className="py-1.5 px-2 bg-white hover:bg-orange-100/50 rounded-xl border border-orange-200 text-slate-800 font-semibold transition-all flex items-center justify-center gap-1.5 shadow-2xs hover:border-[#FF7A00] cursor-pointer"
-                >
-                  <GraduationCap className="w-3.5 h-3.5 text-[#FF7A00]" />
-                  <span>Student</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAutofillDemo('recruiter')}
-                  className="py-1.5 px-2 bg-white hover:bg-orange-100/50 rounded-xl border border-orange-200 text-slate-800 font-semibold transition-all flex items-center justify-center gap-1.5 shadow-2xs hover:border-purple-400 cursor-pointer"
-                >
-                  <Building2 className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Recruiter</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleAutofillDemo('admin')}
-                  className="py-1.5 px-2 bg-white hover:bg-orange-100/50 rounded-xl border border-orange-200 text-slate-800 font-semibold transition-all flex items-center justify-center gap-1.5 shadow-2xs hover:border-emerald-500 cursor-pointer"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Admin</span>
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* VIEW 1: SIGN IN (With Password Login vs Instant OTP Login toggle) */}
           {mode === 'login' && (
             <div className="space-y-3.5">
@@ -777,7 +748,7 @@ export const AuthModal: React.FC = () => {
                         required
                         value={loginIdentifier}
                         onChange={(e) => setLoginIdentifier(e.target.value)}
-                        placeholder="e.g. 9876543210 or aarav@example.com"
+                        placeholder="name@example.com or 10-digit mobile"
                         className="w-full pl-9.5 pr-4 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl outline-hidden focus:border-[#FF7A00] focus:bg-white text-slate-900 font-medium transition-all"
                       />
                     </div>
@@ -1052,36 +1023,49 @@ export const AuthModal: React.FC = () => {
           {mode === 'register' && (
             <form onSubmit={handleRegisterSubmit} className="space-y-3.5 animate-in fade-in">
               
-              {/* Role Selection */}
+              {/* Role Selection (Student, Recruiter, Experienced Candidate only) */}
               <div>
                 <label className="text-xs font-bold text-slate-700 block mb-1.5">
                   I am Registering As:
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => setRegRole('student')}
-                    className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    className={`py-2 px-2 rounded-xl border text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                       regRole === 'student'
                         ? 'border-[#FF7A00] bg-orange-50 text-[#FF7A00] shadow-xs'
                         : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
                     <GraduationCap className="w-4 h-4" />
-                    <span>Student / Youth</span>
+                    <span>Student</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setRegRole('recruiter')}
-                    className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    className={`py-2 px-2 rounded-xl border text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                       regRole === 'recruiter'
                         ? 'border-purple-600 bg-purple-50 text-purple-700 shadow-xs'
                         : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
                     <Building2 className="w-4 h-4" />
-                    <span>Company / Recruiter</span>
+                    <span>Recruiter</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setRegRole('experienced')}
+                    className={`py-2 px-2 rounded-xl border text-[11px] font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      regRole === 'experienced'
+                        ? 'border-[#FF7A00] bg-orange-50 text-[#FF7A00] shadow-xs'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <UserCheck className="w-4 h-4" />
+                    <span className="text-center leading-tight">Experienced Candidate</span>
                   </button>
                 </div>
               </div>
@@ -1096,7 +1080,7 @@ export const AuthModal: React.FC = () => {
                     required
                     value={regName}
                     onChange={(e) => setRegName(e.target.value)}
-                    placeholder="e.g. Aarav Sharma"
+                    placeholder="Enter your full name"
                     className="w-full pl-9.5 pr-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl outline-hidden focus:border-[#FF7A00] focus:bg-white text-slate-900"
                   />
                 </div>
@@ -1187,6 +1171,38 @@ export const AuthModal: React.FC = () => {
                 </div>
               )}
 
+              {/* Experienced Candidate Details */}
+              {regRole === 'experienced' && (
+                <div className="p-3 bg-orange-50/50 rounded-2xl border border-orange-200 space-y-2.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#FF7A00]">
+                    Professional Experience
+                  </span>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-700 block mb-0.5">Current / Previous Role</label>
+                      <input
+                        type="text"
+                        value={regCurrentRole}
+                        onChange={(e) => setRegCurrentRole(e.target.value)}
+                        placeholder="e.g. Software Engineer"
+                        className="w-full px-3 py-1.5 text-xs bg-white border border-orange-200 rounded-xl outline-hidden focus:border-[#FF7A00]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-700 block mb-0.5">Years of Experience</label>
+                      <input
+                        type="text"
+                        value={regYearsExperience}
+                        onChange={(e) => setRegYearsExperience(e.target.value)}
+                        placeholder="e.g. 3 years"
+                        className="w-full px-3 py-1.5 text-xs bg-white border border-orange-200 rounded-xl outline-hidden focus:border-[#FF7A00]"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Recruiter Details */}
               {regRole === 'recruiter' && (
                 <div className="p-3 bg-purple-50/60 rounded-2xl border border-purple-200 space-y-2.5">
@@ -1202,7 +1218,7 @@ export const AuthModal: React.FC = () => {
                         required
                         value={regCompany}
                         onChange={(e) => setRegCompany(e.target.value)}
-                        placeholder="e.g. BharatTech Labs"
+                        placeholder="Enter company name"
                         className="w-full px-3 py-1.5 text-xs bg-white border border-purple-200 rounded-xl outline-hidden focus:border-purple-600"
                       />
                     </div>
@@ -1433,7 +1449,7 @@ export const AuthModal: React.FC = () => {
                   required
                   value={forgotIdentifier}
                   onChange={(e) => setForgotIdentifier(e.target.value)}
-                  placeholder="e.g. 9876543210 or aarav@example.com"
+                  placeholder="name@example.com or 10-digit mobile"
                   className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl outline-hidden focus:border-[#FF7A00] focus:bg-white text-slate-900 font-medium"
                 />
               </div>

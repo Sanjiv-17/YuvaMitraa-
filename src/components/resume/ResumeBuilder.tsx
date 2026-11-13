@@ -28,9 +28,9 @@ const RESUME_PRESETS = [
   {
     name: 'Frontend Developer',
     role: 'Frontend React Developer / Intern',
-    text: `AARAV SHARMA
-aarav.sharma@example.com | +91 9876543210 | New Delhi, India
-GitHub: github.com/aaravsharma | LinkedIn: linkedin.com/in/aaravsharma
+    text: `[FULL NAME]
+your.email@domain.com | +91 XXXXX XXXXX | New Delhi, India
+GitHub: github.com/username | LinkedIn: linkedin.com/in/username
 
 PROFESSIONAL SUMMARY
 Proactive 3rd-year Computer Science undergraduate with hands-on experience building modern, responsive web applications using React, TypeScript, and Tailwind CSS. Passionate about performant UI/UX, clean code architecture, and REST API integration.

@@ -12,7 +12,7 @@ export type Language =
   | 'Odia'
   | 'Urdu';
 
-export type UserRole = 'student' | 'college' | 'recruiter' | 'admin';
+export type UserRole = 'student' | 'recruiter' | 'experienced' | 'college' | 'admin';
 
 export interface StudentProject {
   id: string;
@@ -41,6 +41,8 @@ export interface UserProfile {
   cgpa?: string;
   graduationYear: string;
   age?: number;
+  currentRole?: string;
+  yearsOfExperience?: string;
   companyName?: string;
   designation?: string;
   cinOrRegistrationNumber?: string;

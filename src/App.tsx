@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
-import { Bot, Smartphone, Monitor } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Bot, Smartphone, Monitor, ShieldAlert, X } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/common/Navbar';
 import { Sidebar } from './components/common/Sidebar';
 import { BottomNav } from './components/common/BottomNav';
-import { FloatingChat } from './components/common/FloatingChat';
 import { HomeDashboard } from './components/home/HomeDashboard';
+import { ExperiencedDashboard } from './components/experienced/ExperiencedDashboard';
 import { LearnSection } from './components/learn/LearnSection';
 import { OpportunitiesSection } from './components/opportunities/OpportunitiesSection';
 import { AIAssistantSection } from './components/assistant/AIAssistantSection';
@@ -16,10 +16,14 @@ import { CollegePortal } from './components/college/CollegePortal';
 import { JobDetailModal } from './components/jobs/JobDetailModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { LoginScreen } from './components/auth/LoginScreen';
+import { AdminLoginScreen } from './components/auth/AdminLoginScreen';
 
 const MainScreenContent: React.FC = () => {
-  const { activeTab } = useApp();
+  const { activeTab, isAdmin, user } = useApp();
 
+  if (activeTab === 'experienced' || (activeTab === 'home' && user.role === 'experienced')) {
+    return <ExperiencedDashboard />;
+  }
   if (activeTab === 'home') {
     return <HomeDashboard />;
   }
@@ -39,7 +43,8 @@ const MainScreenContent: React.FC = () => {
     return <ProfilePage />;
   }
   if (activeTab === 'admin') {
-    return <AdminDashboard />;
+    // Enforce server-verified admin claim check before rendering AdminDashboard
+    return isAdmin ? <AdminDashboard /> : (user.role === 'experienced' ? <ExperiencedDashboard /> : <HomeDashboard />);
   }
   if (activeTab === 'recruiter') {
     return <RecruiterPortal />;
@@ -52,13 +57,68 @@ const MainScreenContent: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated, viewportMode, setViewportMode, setActiveTab } = useApp();
-  const [isChatOpen, setIsChatOpen] = useState(false);
+  const { isAuthenticated, isAdmin, viewportMode, setViewportMode, setActiveTab } = useApp();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [pathname, setPathname] = useState<string>(() =>
+    typeof window !== 'undefined' ? window.location.pathname : '/'
+  );
+  const [unauthorizedNotice, setUnauthorizedNotice] = useState<string | null>(null);
 
-  // If not authenticated, display login screen first as required
-  if (!isAuthenticated) {
+  useEffect(() => {
+    const syncPath = () => {
+      setPathname(window.location.pathname);
+    };
+    window.addEventListener('popstate', syncPath);
+    return () => window.removeEventListener('popstate', syncPath);
+  }, []);
+
+  const isHiddenAdminLogin = pathname === '/admin-login';
+  const isAdminWildcardRoute = pathname.startsWith('/admin') && pathname !== '/admin-login';
+
+  // Block any non-admin or unauthenticated user from opening /admin-* routes
+  useEffect(() => {
+    if (isAdminWildcardRoute && (!isAuthenticated || !isAdmin)) {
+      window.history.replaceState({}, '', '/');
+      setPathname('/');
+      setUnauthorizedNotice('Unauthorized access: Admin routes are restricted to verified administrators.');
+    }
+  }, [isAdminWildcardRoute, isAuthenticated, isAdmin]);
+
+  // Hidden /admin-login route (not linked from any screen)
+  if (isHiddenAdminLogin) {
+    if (isAuthenticated && isAdmin) {
+      if (typeof window !== 'undefined' && window.location.pathname !== '/admin') {
+        window.history.replaceState({}, '', '/admin');
+        setPathname('/admin');
+      }
+    } else {
+      return <AdminLoginScreen />;
+    }
+  }
+
+  // Block /admin-* routes immediately if user does not hold verified admin claim
+  if (isAdminWildcardRoute && (!isAuthenticated || !isAdmin)) {
     return <LoginScreen />;
+  }
+
+  // If not authenticated, display public login screen
+  if (!isAuthenticated) {
+    return (
+      <>
+        {unauthorizedNotice && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-md w-[92%] p-3.5 rounded-2xl bg-rose-950/95 border border-rose-600 text-rose-100 text-xs shadow-2xl flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{unauthorizedNotice}</span>
+            </div>
+            <button onClick={() => setUnauthorizedNotice(null)} className="text-rose-300 hover:text-white cursor-pointer">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+        <LoginScreen />
+      </>
+    );
   }
 
   // MOBILE SCREEN VIEWPORT: Fixed smartphone frame
@@ -99,8 +159,8 @@ const AppContent: React.FC = () => {
             </div>
             <div className="flex items-center gap-1.5">
               <span className="text-[10px]">5G</span>
-              <div className="w-4 h-2 rounded-2xs border border-white/80 p-0.5 flex items-center">
-                <div className="h-full w-full bg-white rounded-3xs"></div>
+              <div className="w-4 h-2 rounded-xs border border-white/80 p-0.5 flex items-center">
+                <div className="h-full w-full bg-white rounded-[1px]"></div>
               </div>
             </div>
           </div>

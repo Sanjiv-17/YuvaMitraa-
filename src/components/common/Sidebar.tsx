@@ -26,10 +26,12 @@ interface NavItem {
 }
 
 export const Sidebar: React.FC = () => {
-  const { activeTab, setActiveTab, t, applications, certificates, isRecruiter, isCollege, isAdmin } = useApp();
+  const { activeTab, setActiveTab, applications, certificates, isRecruiter, isExperienced, isCollege, isAdmin } = useApp();
+
+  const homeTarget = isExperienced ? 'experienced' : isRecruiter ? 'recruiter' : 'home';
 
   const navItems: NavItem[] = [
-    { id: 'home', label: 'Home', icon: Home },
+    { id: homeTarget, label: isExperienced ? 'Career Hub' : 'Home', icon: Home },
     { id: 'learn', label: 'Learn', icon: BookOpen, count: certificates.length },
     { id: 'opportunities', label: 'Opportunities', icon: Briefcase, count: applications.length, badge: 'Active' },
     { id: 'ai-assistant', label: 'AI Assistant', icon: Sparkles, ai: true },
@@ -45,7 +47,7 @@ export const Sidebar: React.FC = () => {
   }
 
   if (isRecruiter) {
-    navItems.push({ id: 'recruiter', label: 'Recruiter Portal', icon: Building2 });
+    navItems.push({ id: 'recruiter', label: 'Recruiter Dashboard', icon: Building2 });
   }
 
   return (

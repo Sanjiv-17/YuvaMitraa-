@@ -190,7 +190,7 @@ export const CareerRoadmap: React.FC = () => {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="inline-flex items-center gap-1.5 bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full text-xs font-semibold">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Tailored by Gemini 3.8 Flash</span>
+                <span>Tailored by Gemini 4 Hydrogen</span>
               </div>
 
               {/* Progress Pill */}

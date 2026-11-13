@@ -15,29 +15,33 @@ import {
   Smartphone,
   GraduationCap,
   Briefcase,
-  Building2,
+  UserCheck,
   KeyRound,
   Check,
   X
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { 
-  loginApi,
-  registerDirectApi,
   sendPasswordResetLinkApi,
-  firebaseLoginApi
+  firebaseLoginApi,
+  verifyAdminClaimApi
 } from '../../services/api';
 import { 
   auth,
   loginWithEmailPassword,
   registerWithEmailPassword,
   sendFirebasePasswordResetEmail,
+  sendVerificationEmail,
   signInWithGoogle,
+  signOutUser,
   checkRedirectResult,
-  syncUserProfileToFirestore
+  syncUserProfileToFirestore,
+  getUserProfileFromFirestore,
+  getFirebaseCustomClaims
 } from '../../services/firebase';
 
 type ScreenMode = 'login' | 'register' | 'forgot';
+type PublicSignupRole = 'student' | 'recruiter' | 'experienced';
 
 interface FirebaseErrorInfo {
   code: string;
@@ -56,16 +60,16 @@ export const LoginScreen: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
 
-  // Register form state
+  // Register form state (strictly 3 public options: student, recruiter, experienced)
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
-  const [regRole, setRegRole] = useState<'student' | 'college' | 'recruiter'>('student');
-  const [regCollegeName, setRegCollegeName] = useState('');
-  const [regAisheCode, setRegAisheCode] = useState('');
+  const [regRole, setRegRole] = useState<PublicSignupRole>('student');
   const [regCompanyName, setRegCompanyName] = useState('');
   const [regCinNumber, setRegCinNumber] = useState('');
+  const [regCurrentRole, setRegCurrentRole] = useState('');
+  const [regYearsExperience, setRegYearsExperience] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(true);
 
   // Forgot Password state
@@ -79,29 +83,87 @@ export const LoginScreen: React.FC = () => {
   const [errorInfo, setErrorInfo] = useState<FirebaseErrorInfo | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Resolve user role from Firestore & Firebase claims after sign-in, then redirect to matching dashboard
+  const completePostAuthLogin = async (fbUser: {
+    uid: string;
+    email?: string | null;
+    displayName?: string | null;
+    photoURL?: string | null;
+    emailVerified?: boolean;
+  }) => {
+    const email = (fbUser.email || '').toLowerCase();
+    const name = fbUser.displayName || (email ? email.split('@')[0] : 'Yuva Member');
+    const photoUrl = fbUser.photoURL || '';
+    const isFirebaseAuthUser = Boolean(auth.currentUser && auth.currentUser.uid === fbUser.uid);
+
+    let idToken: string | undefined;
+    let claims: Record<string, any> = {};
+    if (isFirebaseAuthUser && auth.currentUser) {
+      idToken = await auth.currentUser.getIdToken(true);
+      claims = await getFirebaseCustomClaims(false);
+    }
+
+    // Check if user holds server-issued verified admin custom claim
+    if (claims.admin === true && fbUser.emailVerified === true && idToken) {
+      const adminRes = await verifyAdminClaimApi(idToken);
+      login(adminRes.token, { ...adminRes.user, role: 'admin' });
+      return;
+    }
+
+    // Read role from Firestore users/{uid} (gracefully null if Firestore API is disabled or offline)
+    const firestoreProfile = isFirebaseAuthUser ? await getUserProfileFromFirestore(fbUser.uid) : null;
+
+    // Pass Firestore role if available; otherwise let server preserve registered role
+    const backendRes = await firebaseLoginApi({
+      firebaseUid: fbUser.uid,
+      idToken,
+      email,
+      name: firestoreProfile?.name || name,
+      role: firestoreProfile?.role,
+      photoUrl,
+      currentRole: firestoreProfile?.currentRole,
+      yearsOfExperience: firestoreProfile?.yearsOfExperience,
+    });
+
+    const resolvedRole = firestoreProfile?.role || backendRes.user?.role || 'student';
+
+    // Reject unauthorized roles on public login (e.g. admin without custom claim or unsupported role)
+    if (resolvedRole !== 'student' && resolvedRole !== 'recruiter' && resolvedRole !== 'experienced') {
+      await signOutUser();
+      const err: any = new Error('Unauthorized role: Your account role is not authorized for this portal.');
+      err.code = 'auth/unauthorized-role';
+      throw err;
+    }
+
+    if (!firestoreProfile && isFirebaseAuthUser) {
+      // Best-effort sync to Firestore without blocking login if Firestore API is disabled
+      syncUserProfileToFirestore(fbUser.uid, {
+        name: backendRes.user?.name || name,
+        email,
+        role: resolvedRole,
+        createdAt: backendRes.user?.createdAt || new Date().toISOString(),
+        currentRole: backendRes.user?.currentRole,
+        yearsOfExperience: backendRes.user?.yearsOfExperience,
+      }, { isNewUser: true }).catch(() => {});
+    }
+
+    login(backendRes.token, {
+      ...backendRes.user,
+      role: resolvedRole,
+      name: firestoreProfile?.name || backendRes.user?.name || name,
+      email: firestoreProfile?.email || email,
+    });
+  };
+
   // Check for redirect result on page boot
   useEffect(() => {
     let isMounted = true;
     checkRedirectResult()
       .then(async (result) => {
         if (!isMounted || !result?.user) return;
-        const fbUser = result.user;
-        const profile = {
-          name: fbUser.displayName || 'Google Member',
-          email: fbUser.email || '',
-          photoUrl: fbUser.photoURL || '',
-          role: 'student'
-        };
-        await syncUserProfileToFirestore(fbUser.uid, profile);
-        const backendRes = await firebaseLoginApi({
-          firebaseUid: fbUser.uid,
-          email: fbUser.email || '',
-          name: fbUser.displayName || 'Google Member'
-        });
-        login(backendRes.token, backendRes.user);
+        await completePostAuthLogin(result.user);
       })
       .catch((err) => {
-        // Silently capture passive redirect errors on initial boot without disturbing user
         console.info('Initial redirect check completed:', err?.code || err?.message || 'ready');
       });
 
@@ -121,7 +183,7 @@ export const LoginScreen: React.FC = () => {
     };
   }, []);
 
-  // Standardized Error Parsing with exact Firebase error codes
+  // Standardized Error Parsing with clear messages for wrong password, unknown email, and unauthorized role
   const handleAuthError = (err: any, context: string = 'Authentication') => {
     console.warn(`${context} notice:`, err?.code || err?.message || err);
     let code = err?.code || 'auth/operation-failed';
@@ -129,29 +191,36 @@ export const LoginScreen: React.FC = () => {
     let solution: string | undefined;
     const msgLower = (message || '').toLowerCase();
 
-    if (
-      code === 'auth/wrong-password' || 
-      code === 'auth/invalid-credential' || 
+    if (code === 'auth/wrong-password') {
+      code = 'auth/wrong-password';
+      message = 'Incorrect password. Please re-enter your password and try again.';
+      solution = 'If you have forgotten your password, click "Forgot Password?" below to receive a password reset link.';
+    } else if (
+      code === 'auth/invalid-credential' ||
       msgLower.includes('invalid credential') ||
       msgLower.includes('incorrect password') ||
       msgLower.includes('wrong password')
     ) {
       code = 'auth/invalid-credential';
-      message = 'The email or password entered is incorrect. Please check your credentials and try again.';
-      solution = 'If you have forgotten your password, click "Forgot Password?" below to receive a secure password reset link, or click one of the Quick Fill buttons below.';
-    } else if (code === 'auth/user-not-found' || msgLower.includes('no registered account') || msgLower.includes('not found')) {
+      message = 'Incorrect email or password. Please verify your credentials and try again.';
+      solution = 'If you have forgotten your password, click "Forgot Password?" below to receive a secure password reset link.';
+    } else if (code === 'auth/user-not-found' || msgLower.includes('no registered account') || msgLower.includes('user-not-found')) {
       code = 'auth/user-not-found';
-      message = 'No registered account found with this email address.';
-      solution = 'Please verify your email address or click "Create Account" below to register in 10 seconds.';
+      message = 'No account found with this email address.';
+      solution = 'Please verify your email address or switch to "Create Account" to register.';
+    } else if (code === 'auth/unauthorized-role' || msgLower.includes('unauthorized role')) {
+      code = 'auth/unauthorized-role';
+      message = 'Unauthorized role: You do not have permission to access or register with this role.';
+      solution = 'Please sign in with an authorized account or select Student, Recruiter, or Experienced Candidate.';
     } else if (code === 'auth/email-already-in-use') {
-      message = 'An account with this email address already exists in the system.';
+      message = 'An account with this email address already exists.';
       solution = 'Please sign in with your existing password, or use the "Forgot Password?" option to reset it.';
     } else if (code === 'auth/weak-password') {
       message = 'The password is too weak. Please use at least 6 characters.';
       solution = 'Choose a strong password containing a combination of letters, numbers, and symbols.';
     } else if (code === 'auth/invalid-email') {
       message = 'The email address format is invalid.';
-      solution = 'Please enter a valid email address such as student@example.com.';
+      solution = 'Please enter a valid email address.';
     } else if (code === 'auth/too-many-requests' || msgLower.includes('locked')) {
       message = 'Access to this account has been temporarily disabled due to multiple failed login attempts.';
       solution = 'Please wait a few moments before trying again, or reset your password.';
@@ -160,7 +229,7 @@ export const LoginScreen: React.FC = () => {
       solution = 'Please click "Continue with Google" again and complete the account selection.';
     } else if (code === 'auth/configuration-not-found') {
       message = 'Google Sign-In provider is not enabled in Firebase Console for this project.';
-      solution = 'You can sign in directly using your registered Email & Password or use the Quick Fill options.';
+      solution = 'You can sign in directly using your registered Email & Password.';
     } else if (code === 'auth/unauthorized-domain') {
       message = 'This preview domain is not listed in your Firebase Authorized Domains.';
       solution = 'Add this domain to Firebase Console > Authentication > Settings > Authorized domains.';
@@ -169,7 +238,7 @@ export const LoginScreen: React.FC = () => {
     setErrorInfo({ code, message, solution });
   };
 
-  // 1. Direct Email & Password Sign In
+  // 1. Direct Email & Password Sign In via Firebase Auth + Firestore role lookup
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorInfo(null);
@@ -197,64 +266,11 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Step A: Attempt direct Firebase Authentication sign in
-      let firebaseUid = '';
-      let fbError: any = null;
-
-      try {
-        const credential = await loginWithEmailPassword(email, pass);
-        if (credential.user) {
-          firebaseUid = credential.user.uid;
-        }
-      } catch (fbErr: any) {
-        fbError = fbErr;
-        console.warn('Firebase login attempt notice:', fbErr?.code || fbErr?.message);
+      const credential = await loginWithEmailPassword(email, pass);
+      if (!credential.user) {
+        throw new Error('Authentication failed. Please try again.');
       }
-
-      // Step B: Authenticate with backend API session
-      let backendRes: any = null;
-      try {
-        backendRes = await loginApi(email, pass, rememberMe);
-      } catch (backendErr: any) {
-        // If user already authenticated in Firebase Auth, exchange verified credential for backend session
-        if (firebaseUid) {
-          try {
-            backendRes = await firebaseLoginApi({
-              firebaseUid,
-              email,
-              name: email.split('@')[0],
-              photoUrl: ''
-            });
-          } catch {
-            throw backendErr;
-          }
-        } else {
-          if (fbError && (fbError.code === 'auth/too-many-requests' || fbError.code === 'auth/user-disabled')) {
-            throw fbError;
-          }
-          throw backendErr;
-        }
-      }
-
-      // Step C: If backend authenticated successfully but user wasn't registered in Firebase Auth yet, auto-sync to Firebase
-      if (!firebaseUid && backendRes?.user) {
-        try {
-          const newCred = await registerWithEmailPassword(backendRes.user.name || 'Yuva Member', email, pass);
-          if (newCred.user) {
-            firebaseUid = newCred.user.uid;
-          }
-        } catch (syncErr: any) {
-          console.warn('Firebase Auth auto-link notice:', syncErr?.code || syncErr);
-        }
-      }
-
-      // Step D: Sync profile with Firestore if Firebase user exists
-      if (firebaseUid && backendRes.user) {
-        await syncUserProfileToFirestore(firebaseUid, backendRes.user);
-      }
-
-      // Step E: Establish session and redirect to home dashboard
-      login(backendRes.token, backendRes.user);
+      await completePostAuthLogin(credential.user);
     } catch (err: any) {
       handleAuthError(err, 'Email & Password Login');
     } finally {
@@ -262,14 +278,14 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  // 2. Direct User Registration (No OTP)
+  // 2. Direct User Registration (Student, Recruiter, or Experienced Candidate only)
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorInfo(null);
     setSuccessMessage(null);
 
     const name = regName.trim();
-    const email = regEmail.trim();
+    const email = regEmail.trim().toLowerCase();
     const pass = regPassword;
     const confirmPass = regConfirmPassword;
 
@@ -305,6 +321,14 @@ export const LoginScreen: React.FC = () => {
       return;
     }
 
+    if (regRole !== 'student' && regRole !== 'recruiter' && regRole !== 'experienced') {
+      setErrorInfo({
+        code: 'auth/unauthorized-role',
+        message: 'Unauthorized role selection.'
+      });
+      return;
+    }
+
     if (!agreeTerms) {
       setErrorInfo({
         code: 'auth/terms-required',
@@ -316,42 +340,47 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Step A: Create Firebase user via Firebase Authentication
-      let firebaseUid = '';
-      try {
-        const credential = await registerWithEmailPassword(name, email, pass);
-        if (credential.user) {
-          firebaseUid = credential.user.uid;
-        }
-      } catch (fbErr: any) {
-        if (fbErr.code === 'auth/email-already-in-use') {
-          throw fbErr;
-        }
-        console.warn('Firebase registration notice:', fbErr.code);
+      const credential = await registerWithEmailPassword(name, email, pass);
+      const fbUser = credential.user;
+      if (!fbUser) {
+        throw new Error('Failed to create Firebase user.');
       }
 
-      // Step B: Create user record in backend database
-      const backendRes = await registerDirectApi({
+      // Send email verification link (non-blocking if SMTP/Firebase rate-limited)
+      sendVerificationEmail(fbUser).catch(() => {});
+
+      const createdAt = new Date().toISOString();
+      // Save chosen role in Firestore: users/{uid} -> { role, email, createdAt }
+      await syncUserProfileToFirestore(fbUser.uid, {
         name,
         email,
-        password: pass,
-        confirmPassword: confirmPass,
         role: regRole,
-        college: regRole === 'college' ? regCollegeName : undefined,
-        institution: regRole === 'college' ? regCollegeName : undefined,
-        collegeAisheCode: regRole === 'college' ? regAisheCode : undefined,
-        companyName: regRole === 'recruiter' ? regCompanyName : undefined,
-        cinOrRegistrationNumber: regRole === 'recruiter' ? regCinNumber : undefined,
-        firebaseUid: firebaseUid || undefined
+        createdAt,
+        currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+        yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+      }, { isNewUser: true });
+
+      const idToken = await fbUser.getIdToken();
+      const backendRes = await firebaseLoginApi({
+        firebaseUid: fbUser.uid,
+        idToken,
+        email,
+        name,
+        role: regRole,
+        currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+        yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
       });
 
-      // Step C: Sync profile to Firestore
-      if (firebaseUid && backendRes.user) {
-        await syncUserProfileToFirestore(firebaseUid, backendRes.user);
-      }
-
-      // Step D: Establish session and redirect to home dashboard
-      login(backendRes.token, backendRes.user);
+      login(backendRes.token, {
+        ...backendRes.user,
+        role: regRole,
+        name,
+        email,
+        companyName: regRole === 'recruiter' ? regCompanyName.trim() : undefined,
+        cinOrRegistrationNumber: regRole === 'recruiter' ? regCinNumber.trim() : undefined,
+        currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+        yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+      });
     } catch (err: any) {
       handleAuthError(err, 'Registration');
     } finally {
@@ -377,17 +406,9 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Dispatches Firebase password reset email
-      try {
-        await sendFirebasePasswordResetEmail(email);
-      } catch (fbErr: any) {
-        console.warn('Firebase password reset email notice:', fbErr.code);
-      }
-
-      // Also triggers backend password reset email link
-      await sendPasswordResetLinkApi(email);
-
-      setSuccessMessage(`A secure password reset link has been dispatched to ${email}. Please check your inbox and follow the instructions.`);
+      await sendFirebasePasswordResetEmail(email);
+      await sendPasswordResetLinkApi(email).catch(() => {});
+      setSuccessMessage('Reset link sent. Check your inbox and spam folder.');
     } catch (err: any) {
       handleAuthError(err, 'Forgot Password');
     } finally {
@@ -408,27 +429,7 @@ export const LoginScreen: React.FC = () => {
         return;
       }
 
-      const fbUser = result.user;
-      const email = fbUser.email || '';
-      const name = fbUser.displayName || 'Google Member';
-      const photoUrl = fbUser.photoURL || '';
-
-      // Sync Firestore profile
-      await syncUserProfileToFirestore(fbUser.uid, {
-        name,
-        email,
-        role: 'student'
-      });
-
-      // Exchange for backend session
-      const backendRes = await firebaseLoginApi({
-        firebaseUid: fbUser.uid,
-        email,
-        name,
-        photoUrl
-      });
-
-      login(backendRes.token, backendRes.user);
+      await completePostAuthLogin(result.user);
     } catch (err: any) {
       handleAuthError(err, 'Google Sign-In');
     } finally {
@@ -739,63 +740,6 @@ export const LoginScreen: React.FC = () => {
               )}
               <span>Continue with Google</span>
             </button>
-
-            {/* Quick Fill Registered Accounts */}
-            <div className="pt-3 border-t border-slate-800 text-center">
-              <span className="text-[10px] text-slate-400 block mb-2 font-medium">
-                Quick Fill Real Credentials:
-              </span>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail('sanjivsanju017@gmail.com');
-                    setLoginPassword('Admin@123');
-                    setErrorInfo(null);
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-amber-500 rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
-                >
-                  <span className="font-semibold text-amber-400">Admin</span>
-                  <span className="text-slate-500 text-[9px]">Sanjiv</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail('aarav.sharma@example.com');
-                    setLoginPassword('Student@123');
-                    setErrorInfo(null);
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-[#FF7A00] rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
-                >
-                  <span className="font-semibold text-orange-400">Student</span>
-                  <span className="text-slate-500 text-[9px]">Aarav</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail('placement@nitdelhi.ac.in');
-                    setLoginPassword('College@123');
-                    setErrorInfo(null);
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-sky-500 rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
-                >
-                  <span className="font-semibold text-sky-400">College / TPO</span>
-                  <span className="text-slate-500 text-[9px]">NIT Delhi</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail('recruiter@techbharat.org');
-                    setLoginPassword('Recruiter@123');
-                    setErrorInfo(null);
-                  }}
-                  className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500 rounded-lg text-[10px] text-slate-300 hover:text-white transition-all text-left flex items-center justify-between cursor-pointer"
-                >
-                  <span className="font-semibold text-emerald-400">Recruiter</span>
-                  <span className="text-slate-500 text-[9px]">TechBharat</span>
-                </button>
-              </div>
-            </div>
           </form>
         )}
 
@@ -818,7 +762,7 @@ export const LoginScreen: React.FC = () => {
                   type="text"
                   value={regName}
                   onChange={(e) => setRegName(e.target.value)}
-                  placeholder="e.g. Aarav Sharma"
+                  placeholder="Enter your full name"
                   autoComplete="name"
                   required
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-900/90 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-[#FF7A00] focus:ring-1 focus:ring-[#FF7A00] transition-colors"
@@ -926,7 +870,7 @@ export const LoginScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* Role Selection Toggle */}
+            {/* Role Selection Toggle (Student, Recruiter, Experienced Candidate only) */}
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 I am registering as:
@@ -946,18 +890,6 @@ export const LoginScreen: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRegRole('college')}
-                  className={`py-2 px-2 rounded-xl border text-[11px] font-medium flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                    regRole === 'college'
-                      ? 'bg-[#FF7A00]/15 border-[#FF7A00] text-amber-300 font-bold'
-                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Building2 className="w-4 h-4" />
-                  <span>College / TPO</span>
-                </button>
-                <button
-                  type="button"
                   onClick={() => setRegRole('recruiter')}
                   className={`py-2 px-2 rounded-xl border text-[11px] font-medium flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                     regRole === 'recruiter'
@@ -968,36 +900,46 @@ export const LoginScreen: React.FC = () => {
                   <Briefcase className="w-4 h-4" />
                   <span>Recruiter</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setRegRole('experienced')}
+                  className={`py-2 px-2 rounded-xl border text-[11px] font-medium flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                    regRole === 'experienced'
+                      ? 'bg-[#FF7A00]/15 border-[#FF7A00] text-amber-300 font-bold'
+                      : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <UserCheck className="w-4 h-4" />
+                  <span className="text-center leading-tight">Experienced Candidate</span>
+                </button>
               </div>
             </div>
 
-            {/* Conditional College Fields */}
-            {regRole === 'college' && (
+            {/* Conditional Experienced Candidate Fields */}
+            {regRole === 'experienced' && (
               <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-700 space-y-2.5 animate-in fade-in">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                    College / University Name *
+                    Current / Previous Role
                   </label>
                   <input
                     type="text"
-                    required
-                    value={regCollegeName}
-                    onChange={(e) => setRegCollegeName(e.target.value)}
-                    placeholder="e.g. National Institute of Technology Delhi"
+                    value={regCurrentRole}
+                    onChange={(e) => setRegCurrentRole(e.target.value)}
+                    placeholder="e.g. Software Engineer, Operations Analyst"
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                    AISHE Code (All India Survey on Higher Education) *
+                    Years of Experience
                   </label>
                   <input
                     type="text"
-                    required
-                    value={regAisheCode}
-                    onChange={(e) => setRegAisheCode(e.target.value)}
-                    placeholder="e.g. C-48921"
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
+                    value={regYearsExperience}
+                    onChange={(e) => setRegYearsExperience(e.target.value)}
+                    placeholder="e.g. 3 years"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
                   />
                 </div>
               </div>
@@ -1015,13 +957,13 @@ export const LoginScreen: React.FC = () => {
                     required
                     value={regCompanyName}
                     onChange={(e) => setRegCompanyName(e.target.value)}
-                    placeholder="e.g. BharatTech Innovations Pvt Ltd"
+                    placeholder="e.g. Your Registered Company Pvt Ltd"
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF7A00]"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-300 mb-1">
-                    Corporate Identification Number (CIN) or MCA Reg *
+                    Corporate Identification Number (CIN) or Reg *
                   </label>
                   <input
                     type="text"

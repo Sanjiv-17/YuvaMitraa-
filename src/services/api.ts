@@ -165,7 +165,7 @@ export async function generateResumeFromProfile(userProfile: any, targetRole: st
         'Use standard section headings: EDUCATION, TECHNICAL SKILLS, PROJECTS.',
         'Include numbers in your bullet points to demonstrate quantifiable impact.'
       ],
-      resumeText: `${userProfile?.name || 'Aarav Sharma'}\n${userProfile?.email || 'student@example.com'} | ${userProfile?.phone || '+91 98765 43210'}\n\nEDUCATION\n${userProfile?.college || 'Engineering College'} - ${userProfile?.branch || 'CSE'}\n\nSKILLS\n${(userProfile?.skills || ['JavaScript', 'React']).join(', ')}`
+      resumeText: `${userProfile?.name || 'Candidate Name'}\n${userProfile?.email || 'email@domain.com'} | ${userProfile?.phone || '+91 XXXXX XXXXX'}\n\nEDUCATION\n${userProfile?.college || 'University / Institution'} - ${userProfile?.branch || 'Specialization'}\n\nSKILLS\n${(userProfile?.skills || ['JavaScript', 'React']).join(', ')}`
     };
   }
 }
@@ -399,24 +399,30 @@ export async function registerDirectApi(payload: {
   email: string;
   password: string;
   confirmPassword?: string;
-  role?: string;
+  role?: 'student' | 'recruiter' | 'experienced';
+  currentRole?: string;
+  yearsOfExperience?: string;
   college?: string;
   institution?: string;
-  collegeAisheCode?: string;
   companyName?: string;
   cinOrRegistrationNumber?: string;
   course?: string;
   location?: string;
   firebaseUid?: string;
+  idToken?: string;
 }) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (payload.idToken) headers['Authorization'] = `Bearer ${payload.idToken}`;
   const res = await fetch('/api/auth/register', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Registration failed');
+    const err: any = new Error(data.error || 'Registration failed');
+    if (data.code) err.code = data.code;
+    throw err;
   }
   return data;
 }
@@ -439,12 +445,14 @@ export async function registerInitApi(payload: {
   email: string;
   mobile: string;
   password: string;
-  role: 'student' | 'recruiter';
+  role: 'student' | 'recruiter' | 'experienced';
   college?: string;
   course?: string;
   studyYear?: string;
   companyName?: string;
   designation?: string;
+  currentRole?: string;
+  yearsOfExperience?: string;
 }) {
   const res = await fetch('/api/auth/register-init', {
     method: 'POST',
@@ -607,20 +615,46 @@ export async function updateProfileApi(token: string, profile: Partial<UserProfi
 
 export async function firebaseLoginApi(payload: {
   firebaseUid: string;
+  idToken?: string;
   phoneNumber?: string;
   email?: string;
   name?: string;
   role?: string;
   photoUrl?: string;
+  currentRole?: string;
+  yearsOfExperience?: string;
 }) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (payload.idToken) headers['Authorization'] = `Bearer ${payload.idToken}`;
+
   const res = await fetch('/api/auth/firebase-login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to authenticate Firebase session');
+    const err: any = new Error(data.error || 'Failed to authenticate Firebase session');
+    if (data.code) err.code = data.code;
+    throw err;
+  }
+  return data;
+}
+
+export async function verifyAdminClaimApi(idToken: string) {
+  const res = await fetch('/api/auth/admin-verify', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ idToken }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const err: any = new Error(data.error || 'Unauthorized admin access');
+    if (data.code) err.code = data.code;
+    throw err;
   }
   return data;
 }

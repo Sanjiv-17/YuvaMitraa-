@@ -63,22 +63,22 @@ export const HomeDashboard: React.FC = () => {
             </div>
             
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight">
-              Namaste, {user.name.split(' ')[0]}! 🚀
+              Namaste, {(user?.name || 'Member').split(' ')[0]}! 🚀
             </h1>
             
             <p className="text-xs sm:text-sm text-orange-100 max-w-xl font-medium">
-              You are on a <span className="text-white font-bold">{user.streakDays}-day streak</span>! Complete 1 quiz today to level up your employability score and unlock verified recruiter visibility.
+              You are on a <span className="text-white font-bold">{user?.streakDays ?? 1}-day streak</span>! Complete 1 quiz today to level up your employability score and unlock verified recruiter visibility.
             </p>
 
             <div className="flex flex-wrap items-center gap-2 pt-2">
               <span className="text-xs bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full font-medium">
-                ⭐ {user.xpPoints} XP Earned
+                ⭐ {user?.xpPoints ?? 500} XP Earned
               </span>
               <span className="text-xs bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full font-medium">
-                🎖️ {user.badges[user.badges.length - 1] || 'Scholar'}
+                🎖️ {(user?.badges || [])[(user?.badges || []).length - 1] || 'Scholar'}
               </span>
               <span className="text-xs bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full font-medium">
-                📍 {user.location.split(',')[0]}
+                📍 {(user?.location || 'New Delhi').split(',')[0]}
               </span>
             </div>
           </div>
@@ -167,7 +167,7 @@ export const HomeDashboard: React.FC = () => {
               <BookOpen className="w-4 h-4" />
             </div>
           </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">{user.enrolledCourses.length || 1}</div>
+          <div className="text-2xl font-bold text-slate-900 mt-2">{(user?.enrolledCourses || []).length || 1}</div>
           <div className="text-[11px] text-[#0284C7] font-medium flex items-center gap-1 mt-1">
             <span>Free interactive lessons</span>
           </div>
@@ -215,7 +215,7 @@ export const HomeDashboard: React.FC = () => {
               <Sparkles className="w-4 h-4 text-[#FF7A00]" />
               <span>AI Career Acceleration Suite</span>
             </h2>
-            <p className="text-xs text-slate-500">Powered by Gemini 3.8 Flash</p>
+            <p className="text-xs text-slate-500">Powered by Gemini 4 Hydrogen</p>
           </div>
         </div>
 
@@ -356,7 +356,7 @@ export const HomeDashboard: React.FC = () => {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
-                        {job.requiredSkills.slice(0, 3).map((skill, sIdx) => (
+                        {(job?.requiredSkills || []).slice(0, 3).map((skill, sIdx) => (
                           <span
                             key={sIdx}
                             className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md"

@@ -32,7 +32,7 @@ import { Job } from '../../types';
 import { reportJobApi, fetchPersonalizedRecommendationsApi } from '../../services/api';
 import { openExternalUrl } from '../../utils/navigation';
 
-export const JobFinder: React.FC = () => {
+export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false }) => {
   const { 
     jobs, 
     user, 
@@ -162,6 +162,10 @@ export const JobFinder: React.FC = () => {
 
   const filteredJobs = useMemo(() => {
     return jobs.filter((job) => {
+      if (savedOnly && !(savedJobIds || []).includes(job.id)) {
+        return false;
+      }
+
       // Keyword filter
       if (searchKeyword.trim()) {
         const q = searchKeyword.toLowerCase();
@@ -214,7 +218,7 @@ export const JobFinder: React.FC = () => {
 
       return true;
     });
-  }, [jobs, searchKeyword, selectedSource, selectedCategory, selectedType, minStipend, maxRadiusKm, calculateDistance]);
+  }, [jobs, savedOnly, savedJobIds, searchKeyword, selectedSource, selectedCategory, selectedType, minStipend, maxRadiusKm, calculateDistance]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 font-['Poppins',sans-serif]">
@@ -323,7 +327,7 @@ export const JobFinder: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {recommendations.slice(0, 3).map((rec: any, rIdx: number) => {
-                const targetJob = jobs.find(j => j.id === rec.jobId);
+                const targetJob = jobs.find(j => j.id === (rec.jobId || rec.id));
                 return (
                   <div
                     key={rIdx}
@@ -332,13 +336,13 @@ export const JobFinder: React.FC = () => {
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1">
                         <span className="text-[10px] font-bold uppercase tracking-wider text-[#FF7A00] bg-orange-50 dark:bg-orange-950 px-2 py-0.5 rounded-md inline-block mb-1">
-                          {rec.sourceName || 'Verified Portal'}
+                          {rec.sourceName || rec.source || 'Verified Portal'}
                         </span>
                         <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-1">
                           {rec.title}
                         </h4>
                         <p className="text-[11px] text-slate-500 font-medium">
-                          {rec.companyName}
+                          {rec.companyName || rec.company}
                         </p>
                       </div>
                       <div className="text-right">
@@ -354,14 +358,14 @@ export const JobFinder: React.FC = () => {
 
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">
-                        {rec.stipendOrSalary}
+                        {rec.stipendOrSalary || rec.stipend}
                       </span>
                       <button
                         onClick={() => {
                           if (targetJob) {
                             setSelectedJobForDetail(targetJob);
-                          } else {
-                            openExternalUrl(rec.originalUrl);
+                          } else if (rec.originalUrl || rec.applyUrl) {
+                            openExternalUrl(rec.originalUrl || rec.applyUrl);
                           }
                         }}
                         className="text-[11px] font-bold text-[#FF7A00] hover:underline flex items-center gap-1 cursor-pointer"
@@ -602,14 +606,25 @@ export const JobFinder: React.FC = () => {
 
           {filteredJobs.length === 0 ? (
             <div className="bg-white dark:bg-slate-800 p-12 text-center rounded-3xl border border-slate-200 dark:border-slate-700 text-slate-500">
-              <Search className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-              <p className="font-semibold text-sm text-slate-700 dark:text-slate-200">No jobs match your criteria</p>
-              <p className="text-xs text-slate-400 mt-1">Try increasing your search radius or selecting &quot;All&quot; categories.</p>
+              {savedOnly ? (
+                <Bookmark className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              ) : (
+                <Search className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              )}
+              <p className="font-semibold text-sm text-slate-700 dark:text-slate-200">
+                {savedOnly ? 'No saved opportunities yet' : 'No jobs match your criteria'}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                {savedOnly
+                  ? 'Bookmark internships or jobs from All Opportunities to track them here.'
+                  : 'Try increasing your search radius or selecting "All" categories.'}
+              </p>
               <button
                 onClick={() => {
                   setSearchKeyword('');
                   setSelectedCategory('All');
                   setSelectedType('All');
+                  setSelectedSource('All');
                   setMaxRadiusKm(100);
                 }}
                 className="mt-4 px-4 py-2 bg-orange-50 dark:bg-orange-950/60 text-[#FF7A00] text-xs font-bold rounded-xl hover:bg-orange-100 cursor-pointer"
