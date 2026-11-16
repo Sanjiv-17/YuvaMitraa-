@@ -10,7 +10,6 @@ import {
   UserRole
 } from '../types';
 import { 
-  INITIAL_USER, 
   SAMPLE_JOBS, 
   SAMPLE_COURSES, 
   UI_TRANSLATIONS 
@@ -23,14 +22,17 @@ import {
   applyOpportunityApi,
   updateApplicationStatusApi,
   postOpportunityApi,
+  updateOpportunityApi,
   deleteOpportunityApi,
   fetchNotificationsApi,
-  markNotificationReadApi
+  markNotificationReadApi,
+  issueCertificateApi
 } from '../services/api';
 import {
   auth,
   onAuthStateChanged,
   getFirebaseCustomClaims,
+  getSavedResumeFromFirestore,
   signOutUser
 } from '../services/firebase';
 
@@ -48,7 +50,7 @@ interface AppContextType {
   courses: Course[];
   jobs: Job[];
   addJob: (job: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>) => Promise<boolean>;
-  updateJob: (jobId: string, updated: Partial<Job>) => void;
+  updateJob: (jobId: string, updated: Partial<Job>) => Promise<void>;
   deleteJob: (jobId: string) => Promise<void>;
   applications: Application[];
   applyForJob: (job: Job, coverLetter: string, eligibilityScore?: number) => Promise<boolean>;
@@ -84,10 +86,6 @@ interface AppContextType {
   authToken: string | null;
   login: (token: string, user: UserProfile) => void;
   logout: () => void;
-  isAuthModalOpen: boolean;
-  authModalMode: 'login' | 'register' | 'forgot';
-  openAuthModal: (mode?: 'login' | 'register' | 'forgot') => void;
-  closeAuthModal: () => void;
   refreshOpportunities: () => Promise<void>;
   refreshApplications: () => Promise<void>;
 }
@@ -113,21 +111,49 @@ const INITIAL_APPLICATIONS: Application[] = [];
 
 const INITIAL_CERTIFICATES: Certificate[] = [];
 
+export const EMPTY_USER: UserProfile = {
+  id: '',
+  name: 'Yuva Member',
+  email: '',
+  phone: '',
+  role: 'student',
+  photoUrl: '',
+  education: '',
+  institution: '',
+  graduationYear: '',
+  skills: [],
+  interests: [],
+  location: 'India',
+  coordinates: {
+    lat: 28.6139,
+    lng: 77.209,
+  },
+  resumeText: '',
+  resumeFileName: '',
+  resumeUpdatedAt: '',
+  streakDays: 0,
+  xpPoints: 0,
+  badges: [],
+  savedJobIds: [],
+  enrolledCourses: [],
+};
+
 export function normalizeUserProfile(rawUser: any): UserProfile {
-  if (!rawUser) return INITIAL_USER;
+  if (!rawUser) return EMPTY_USER;
   return {
-    ...INITIAL_USER,
+    ...EMPTY_USER,
     ...rawUser,
-    skills: Array.isArray(rawUser.skills) && rawUser.skills.length > 0 ? rawUser.skills : INITIAL_USER.skills,
-    interests: Array.isArray(rawUser.interests) && rawUser.interests.length > 0 ? rawUser.interests : INITIAL_USER.interests,
-    enrolledCourses: Array.isArray(rawUser.enrolledCourses) ? rawUser.enrolledCourses : INITIAL_USER.enrolledCourses,
-    savedJobIds: Array.isArray(rawUser.savedJobIds) ? rawUser.savedJobIds : (INITIAL_USER.savedJobIds || []),
-    badges: Array.isArray(rawUser.badges) && rawUser.badges.length > 0 ? rawUser.badges : INITIAL_USER.badges,
-    streakDays: typeof rawUser.streakDays === 'number' ? rawUser.streakDays : (INITIAL_USER.streakDays || 5),
-    xpPoints: typeof rawUser.xpPoints === 'number' ? rawUser.xpPoints : (INITIAL_USER.xpPoints || 1250),
-    location: rawUser.location || INITIAL_USER.location,
-    resumeFileName: rawUser.resumeFileName || INITIAL_USER.resumeFileName,
-    resumeText: rawUser.resumeText || INITIAL_USER.resumeText,
+    skills: Array.isArray(rawUser.skills) ? rawUser.skills : [],
+    interests: Array.isArray(rawUser.interests) ? rawUser.interests : [],
+    enrolledCourses: Array.isArray(rawUser.enrolledCourses) ? rawUser.enrolledCourses : [],
+    savedJobIds: Array.isArray(rawUser.savedJobIds) ? rawUser.savedJobIds : [],
+    badges: Array.isArray(rawUser.badges) ? rawUser.badges : [],
+    streakDays: typeof rawUser.streakDays === 'number' ? rawUser.streakDays : 0,
+    xpPoints: typeof rawUser.xpPoints === 'number' ? rawUser.xpPoints : 0,
+    location: rawUser.location || 'India',
+    resumeFileName: rawUser.resumeFileName || '',
+    resumeText: rawUser.resumeText || '',
+    resumeUpdatedAt: rawUser.resumeUpdatedAt || '',
   };
 }
 
@@ -135,9 +161,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [user, setUser] = useState<UserProfile>(() => {
     try {
       const saved = localStorage.getItem('ym_user');
-      return saved ? normalizeUserProfile(JSON.parse(saved)) : INITIAL_USER;
+      return saved ? normalizeUserProfile(JSON.parse(saved)) : EMPTY_USER;
     } catch {
-      return INITIAL_USER;
+      return EMPTY_USER;
     }
   });
 
@@ -216,9 +242,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return localStorage.getItem('ym_auth_token') || null;
   });
 
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'forgot'>('login');
-
   const [hasVerifiedAdminClaim, setHasVerifiedAdminClaim] = useState<boolean>(false);
 
   const isAuthenticated = Boolean(authToken && user);
@@ -228,99 +251,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isAdmin = user.role === 'admin' && hasVerifiedAdminClaim;
   const role = user.role;
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([
-    {
-      id: 'notif-1',
-      title: 'Application Shortlisted! 🎉',
-      message: 'BharatTech Innovations has shortlisted your application for Frontend React Developer Intern.',
-      date: '1 hour ago',
-      type: 'application',
-      read: false,
-      actionTab: 'applications'
-    },
-    {
-      id: 'notif-2',
-      title: '🔥 5-Day Study Streak Active',
-      message: 'Keep going! Complete 1 module today to reach a 6-day streak and earn +50 XP.',
-      date: '3 hours ago',
-      type: 'streak',
-      read: false,
-      actionTab: 'courses'
-    },
-    {
-      id: 'notif-3',
-      title: 'New Nearby Tech Internship',
-      message: 'DataVyuha Labs posted Python & AI Operations Intern (12 km away).',
-      date: 'Yesterday',
-      type: 'job',
-      read: true,
-      actionTab: 'jobs'
-    }
-  ]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  // Load live opportunities from backend
+  // Load live opportunities from backend (reads data.jobs)
   const refreshOpportunities = async () => {
     try {
-      const data = await fetchOpportunitiesApi();
-      if (Array.isArray(data?.opportunities) && data.opportunities.length > 0) {
-        setJobs(data.opportunities);
+      const data = await fetchOpportunitiesApi({ showAll: isAdmin || isRecruiter || isCollege });
+      const fetchedList = Array.isArray(data?.jobs) ? data.jobs : data?.opportunities;
+      if (Array.isArray(fetchedList) && fetchedList.length > 0) {
+        setJobs(fetchedList);
       }
     } catch (err) {
-      console.warn('Backend opportunities fetch skipped, using cached/mock:', err);
+      console.warn('Backend opportunities fetch failed:', err);
     }
   };
 
-  // Load live applications from backend
+  // Load live applications from backend (requires valid authToken)
   const refreshApplications = async () => {
+    if (!authToken || !user?.email) return;
     try {
-      const data = await fetchApplicationsApi({ candidateEmail: user.email });
+      const data = await fetchApplicationsApi(
+        user.role === 'student' || user.role === 'experienced' ? { candidateEmail: user.email } : undefined,
+        authToken
+      );
       if (Array.isArray(data?.applications)) {
         setApplications(data.applications);
       }
     } catch (err) {
-      console.warn('Backend applications fetch skipped, using cached/mock:', err);
+      console.warn('Backend applications fetch skipped:', err);
     }
   };
 
-  // Load live notifications
+  // Load live notifications (only when authenticated)
   const refreshNotifications = async () => {
+    if (!authToken) return;
     try {
-      const data = await fetchNotificationsApi(authToken || undefined, user.role);
-      if (Array.isArray(data?.notifications) && data.notifications.length > 0) {
+      const data = await fetchNotificationsApi(authToken, user.role);
+      if (Array.isArray(data?.notifications)) {
         setNotifications(data.notifications);
       }
-    } catch (err) {
-      // ignore
+    } catch {
+      // ignore non-critical notification polling failures
     }
   };
 
-  useEffect(() => {
-    refreshOpportunities();
-    if (user?.email) {
-      refreshApplications();
-    }
-    refreshNotifications();
-  }, [user?.email, user?.role]);
+  const hasFetchedPublicOpportunitiesRef = React.useRef(false);
 
-  // Sync to local storage
   useEffect(() => {
-    localStorage.setItem('ym_user', JSON.stringify(user));
+    const needsAllScope = isAdmin || isRecruiter || isCollege;
+    if (!hasFetchedPublicOpportunitiesRef.current || needsAllScope) {
+      hasFetchedPublicOpportunitiesRef.current = true;
+      void refreshOpportunities();
+    }
+    if (authToken && user?.email) {
+      void Promise.all([refreshApplications(), refreshNotifications()]);
+    }
+  }, [authToken, user?.email, user?.role]);
+
+  // Sync to local storage safely
+  useEffect(() => {
+    try { localStorage.setItem('ym_user', JSON.stringify(user)); } catch {}
   }, [user]);
 
   useEffect(() => {
-    localStorage.setItem('ym_jobs', JSON.stringify(jobs));
+    try { localStorage.setItem('ym_jobs', JSON.stringify(jobs)); } catch {}
   }, [jobs]);
 
   useEffect(() => {
-    localStorage.setItem('ym_applications', JSON.stringify(applications));
+    try { localStorage.setItem('ym_applications', JSON.stringify(applications)); } catch {}
   }, [applications]);
 
   useEffect(() => {
-    localStorage.setItem('ym_certificates', JSON.stringify(certificates));
+    try { localStorage.setItem('ym_certificates', JSON.stringify(certificates)); } catch {}
   }, [certificates]);
 
   useEffect(() => {
-    localStorage.setItem('ym_language', language);
+    try { localStorage.setItem('ym_language', language); } catch {}
   }, [language]);
 
   useEffect(() => {
@@ -376,7 +382,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       role: normalized.role,
       photoUrl: normalized.photoUrl,
     }));
-    setIsAuthModalOpen(false);
 
     // Automatically redirect users to their respective dashboards based on Firestore/server role
     if (normalized.role === 'admin') {
@@ -403,33 +408,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     signOutUser();
     setAuthToken(null);
+    setUser(EMPTY_USER);
+    setApplications([]);
+    setNotifications([]);
     setHasVerifiedAdminClaim(false);
     localStorage.removeItem('ym_auth_token');
     localStorage.removeItem('ym_user');
+    localStorage.removeItem('ym_applications');
     setActiveTab('home');
     if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
       window.history.replaceState({}, '', '/');
     }
   };
 
-  const openAuthModal = (mode: 'login' | 'register' | 'forgot' = 'login') => {
-    setAuthModalMode(mode);
-    setIsAuthModalOpen(true);
-  };
-
-  const closeAuthModal = () => {
-    setIsAuthModalOpen(false);
-  };
-
-  // Monitor Firebase Auth custom claims (strict server-verified admin claim check)
+  // Monitor Firebase Auth custom claims & hydrate persisted Firestore resume (users/{uid}/resume/current) on refresh
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser && fbUser.emailVerified) {
-        try {
-          const claims = await getFirebaseCustomClaims(false);
-          setHasVerifiedAdminClaim(claims.admin === true);
-        } catch {
+      if (fbUser) {
+        if (fbUser.emailVerified) {
+          try {
+            const claims = await getFirebaseCustomClaims(false);
+            setHasVerifiedAdminClaim(claims.admin === true);
+          } catch {
+            setHasVerifiedAdminClaim(false);
+          }
+        } else {
           setHasVerifiedAdminClaim(false);
+        }
+
+        try {
+          const savedResume = await getSavedResumeFromFirestore(fbUser.uid);
+          if (savedResume) {
+            setUser((prev) => {
+              const prevEmail = (prev.email || '').toLowerCase();
+              const fbEmail = (fbUser.email || '').toLowerCase();
+              if (prev.id && prevEmail && fbEmail && prevEmail !== fbEmail) {
+                return prev;
+              }
+              return normalizeUserProfile({
+                ...prev,
+                resumeFileName: savedResume.fileName,
+                resumeText: savedResume.text,
+                resumeUpdatedAt: savedResume.updatedAt,
+              });
+            });
+          }
+        } catch {
+          // Non-fatal if offline; localStorage still serves cached profile
         }
       } else {
         setHasVerifiedAdminClaim(false);
@@ -445,10 +470,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchCurrentUserApi(savedToken)
         .then(async (data) => {
           if (data?.user) {
-            const restored = normalizeUserProfile(data.user);
+            const fbUser = auth.currentUser;
+            const savedResume = fbUser
+              ? await getSavedResumeFromFirestore(fbUser.uid).catch(() => null)
+              : null;
+            const restored = normalizeUserProfile({
+              ...data.user,
+              ...(savedResume?.fileName ? { resumeFileName: savedResume.fileName } : {}),
+              ...(savedResume?.text ? { resumeText: savedResume.text } : {}),
+              ...(savedResume?.updatedAt ? { resumeUpdatedAt: savedResume.updatedAt } : {}),
+            });
             if (restored.role === 'admin') {
               // Admin session also requires verified Firebase custom claim on current auth user
-              const fbUser = auth.currentUser;
               if (fbUser && fbUser.emailVerified) {
                 const claims = await getFirebaseCustomClaims(false).catch(() => ({}));
                 if ((claims as any).admin === true) {
@@ -458,8 +491,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   return;
                 }
               }
-              // Even if Firebase client hasn't finished restoring, token came from server /api/auth/admin-verify
               setUser(restored);
+              setActiveTab('admin');
               return;
             }
             setUser(restored);
@@ -522,7 +555,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const exists = applications.some(app => app.jobId === job.id);
     if (exists) return false;
 
-    const newApp: Application = {
+    const res = await applyOpportunityApi(authToken, {
+      jobId: job.id,
+      coverLetter,
+      matchScore: eligibilityScore || 80,
+      candidateEmail: user.email,
+      candidateName: user.name
+    });
+
+    const createdApp: Application = res?.application || {
       id: `app-${Date.now()}`,
       jobId: job.id,
       jobTitle: job.title,
@@ -542,28 +583,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       matchScore: eligibilityScore || 80,
     };
 
-    setApplications(prev => [newApp, ...prev]);
+    setApplications(prev => [createdApp, ...prev]);
 
-    // Send to backend
-    try {
-      await applyOpportunityApi(authToken, {
-        jobId: job.id,
-        coverLetter,
-        matchScore: eligibilityScore || 80,
-        candidateEmail: user.email,
-        candidateName: user.name
-      });
-    } catch (err) {
-      console.warn('Backend apply call logged/fallback:', err);
-    }
-
-    // Give XP and streak bonus
     updateUser({
-      xpPoints: user.xpPoints + 100,
+      xpPoints: (user.xpPoints || 0) + 100,
       badges: user.badges.includes('Job Hunter') ? user.badges : [...user.badges, 'Job Hunter']
     });
 
-    // Add notification
     setNotifications(prev => [
       {
         id: `notif-${Date.now()}`,
@@ -581,61 +607,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateApplicationStatus = async (appId: string, status: Application['status'], details?: any) => {
+    const res = await updateApplicationStatusApi(authToken, appId, {
+      status,
+      ...(details || {})
+    });
+    const updatedApp = res?.application;
     setApplications(prev =>
-      prev.map(app => (app.id === appId ? { ...app, status, ...(details || {}) } : app))
+      prev.map(app => (app.id === appId ? (updatedApp || { ...app, status, ...(details || {}) }) : app))
     );
-
-    try {
-      await updateApplicationStatusApi(authToken, appId, {
-        status,
-        ...(details || {})
-      });
-    } catch (err) {
-      console.warn('Backend application status update logged/fallback:', err);
-    }
   };
 
   const addJob = async (jobData: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>): Promise<boolean> => {
-    try {
-      const res = await postOpportunityApi(authToken, jobData);
-      if (res?.opportunity) {
-        setJobs(prev => [res.opportunity, ...prev]);
-        return true;
-      }
-    } catch (err) {
-      console.warn('Backend postOpportunity fallback:', err);
+    const res = await postOpportunityApi(authToken, jobData);
+    const createdJob = res?.job || res?.opportunity;
+    if (!createdJob) {
+      throw new Error(res?.error || 'Backend did not return created opportunity.');
     }
-
-    // Local fallback
-    const newJob: Job = {
-      ...jobData,
-      id: `job-${Date.now()}`,
-      postedDate: 'Just now',
-      applicantsCount: 0,
-    };
-    setJobs(prev => [newJob, ...prev]);
+    setJobs(prev => [createdJob, ...prev]);
     return true;
   };
 
-  const updateJob = (jobId: string, updated: Partial<Job>) => {
+  const updateJob = async (jobId: string, updated: Partial<Job>): Promise<void> => {
+    const res = await updateOpportunityApi(authToken, jobId, updated);
+    const savedJob = res?.job;
     setJobs(prev =>
-      prev.map(job => (job.id === jobId ? { ...job, ...updated } : job))
+      prev.map(job => (job.id === jobId ? (savedJob || { ...job, ...updated }) : job))
     );
   };
 
   const deleteJob = async (jobId: string) => {
-    setJobs(prev => prev.filter(job => job.id !== jobId));
-    try {
-      if (authToken) {
-        await deleteOpportunityApi(authToken, jobId);
-      }
-    } catch (err) {
-      console.warn('Backend delete job failed:', err);
+    if (!authToken) {
+      throw new Error('Authentication required to delete an opportunity.');
     }
+    await deleteOpportunityApi(authToken, jobId);
+    setJobs(prev => prev.filter(job => job.id !== jobId));
   };
 
   const issueCertificate = (course: Course, scorePercentage: number): Certificate => {
-    const code = `YM-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+    const code = `YM-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const newCert: Certificate = {
       id: `cert-${Date.now()}`,
       certificateCode: code,
@@ -650,17 +659,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setCertificates(prev => [newCert, ...prev]);
 
-    // Update user profile with enrolled course completion
     const existingEnrolled = user.enrolledCourses.find(e => e.courseId === course.id);
     const updatedEnrolled = existingEnrolled
       ? user.enrolledCourses.map(e => e.courseId === course.id ? { ...e, passed: true, finalScore: scorePercentage, certificateId: newCert.id } : e)
       : [...user.enrolledCourses, { courseId: course.id, completedModuleIds: course.modules.map(m => m.id), passed: true, finalScore: scorePercentage, certificateId: newCert.id }];
 
     updateUser({
-      xpPoints: user.xpPoints + 350,
+      xpPoints: (user.xpPoints || 0) + 350,
       enrolledCourses: updatedEnrolled,
       badges: user.badges.includes('Certified Champion') ? user.badges : [...user.badges, 'Certified Champion']
     });
+
+    if (authToken) {
+      issueCertificateApi(authToken, course.id, scorePercentage).catch((err) => {
+        console.warn('Certificate backend sync warning:', err);
+      });
+    }
 
     setNotifications(prev => [
       {
@@ -740,10 +754,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         authToken,
         login,
         logout,
-        isAuthModalOpen,
-        authModalMode,
-        openAuthModal,
-        closeAuthModal,
         refreshOpportunities,
         refreshApplications,
       }}

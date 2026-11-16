@@ -52,96 +52,106 @@ export const CollegePortal: React.FC = () => {
   // New Drive Form
   const [driveForm, setDriveForm] = useState({
     title: '',
-    company: user.institution || 'Campus Placement Cell',
-    location: user.location || 'Campus / Hybrid',
-    city: 'New Delhi',
+    company: user.institution || user.college || '',
+    location: user.location || '',
+    city: '',
     type: 'internship' as const,
     category: 'Tech' as const,
     stipend: '₹20,000 / month',
     stipendAmount: 20000,
     duration: '6 Months',
     requiredSkills: 'React, Node.js, Problem Solving',
-    eligibility: 'Min 65% aggregate or 6.5 CGPA, B.Tech/BCA',
+    eligibility: 'Enrolled undergraduate student (BE/B.Tech/BCA)',
     description: '',
     deadline: '2026-12-15',
     isVerified: true,
     verificationStatus: 'approved' as const,
-    verificationEvidence: `Verified by College TPO (${user.institution || 'NIT Delhi'})`,
+    verificationEvidence: `Verified by College TPO (${user.institution || user.college || 'Placement Cell'})`,
     opportunitySource: 'College Placement Cell' as const
   });
 
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const collegeName = user.institution || user.college || 'National Institute of Technology Delhi (NIT Delhi)';
-  const aisheCode = user.collegeAisheCode || 'C-48921';
+  const collegeName = user.institution || user.college || 'Institutional Placement Cell';
+  const aisheCode = user.collegeAisheCode || 'Pending Verification';
 
   // Load college data
   useEffect(() => {
+    if (!authToken) return;
     const loadCollegeData = async () => {
       setIsLoading(true);
+      setFormError(null);
       try {
         const [studentsData, analyticsData, appsData] = await Promise.all([
-          fetchCollegeStudentsApi(collegeName),
-          fetchCollegeAnalyticsApi(collegeName),
-          fetchApplicationsApi({ collegeName })
+          fetchCollegeStudentsApi(user.institution || user.college, undefined, authToken),
+          fetchCollegeAnalyticsApi(user.institution || user.college, authToken),
+          fetchApplicationsApi({ collegeName: user.institution || user.college }, authToken)
         ]);
 
         if (studentsData?.students) setStudents(studentsData.students);
-        if (analyticsData?.analytics) setAnalytics(analyticsData.analytics);
+        if (analyticsData?.stats || analyticsData?.analytics) {
+          setAnalytics(analyticsData.stats || analyticsData.analytics);
+        }
         if (appsData?.applications) setCollegeApplications(appsData.applications);
-      } catch (err) {
-        console.warn('Error loading college data:', err);
+      } catch (err: any) {
+        setFormError(err?.message || 'Unable to load institutional placement data.');
       } finally {
         setIsLoading(false);
       }
     };
 
     loadCollegeData();
-  }, [collegeName]);
+  }, [collegeName, authToken, user.institution, user.college]);
 
   const collegeDrives = jobs.filter(j => 
     j.opportunitySource === 'College Placement Cell' || 
     j.creatorId === user.id ||
-    j.company.toLowerCase().includes(collegeName.toLowerCase()) ||
+    (user.institution && j.company.toLowerCase().includes(user.institution.toLowerCase())) ||
     j.company.toLowerCase().includes('campus')
   );
 
   const handlePostDrive = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
     const skillsArray = driveForm.requiredSkills.split(',').map(s => s.trim()).filter(Boolean);
     
-    await addJob({
-      title: driveForm.title,
-      company: driveForm.company,
-      location: driveForm.location,
-      city: driveForm.city,
-      coordinates: { lat: 28.6315, lng: 77.2167 },
-      type: driveForm.type,
-      category: driveForm.category,
-      stipend: driveForm.stipend,
-      stipendAmount: driveForm.stipendAmount,
-      duration: driveForm.duration,
-      requiredSkills: skillsArray,
-      eligibility: driveForm.eligibility,
-      description: driveForm.description,
-      responsibilities: [
-        'Participate in on-campus technical assessments and screening rounds',
-        'Work closely with core technical mentors on active products',
-        'Demonstrate continuous learning and team collaboration'
-      ],
-      perks: ['Pre-Placement Offer (PPO) Eligibility', 'Certificate of Merit', 'Mentor Guidance'],
-      deadline: driveForm.deadline,
-      isVerified: true,
-      verificationStatus: 'approved',
-      verificationEvidence: `AISHE ${aisheCode} Placement Drive Approval`,
-      opportunitySource: 'College Placement Cell',
-      creatorId: user.id,
-      creatorRole: 'college'
-    });
+    try {
+      await addJob({
+        title: driveForm.title,
+        company: driveForm.company || collegeName,
+        location: driveForm.location || 'Campus / Hybrid',
+        city: driveForm.city || (driveForm.location ? driveForm.location.split(',')[0].trim() : 'India'),
+        coordinates: user.coordinates || { lat: 28.6315, lng: 77.2167 },
+        type: driveForm.type,
+        category: driveForm.category,
+        stipend: driveForm.stipend,
+        stipendAmount: driveForm.stipendAmount,
+        duration: driveForm.duration,
+        requiredSkills: skillsArray,
+        eligibility: driveForm.eligibility,
+        description: driveForm.description,
+        responsibilities: [
+          'Participate in on-campus technical assessments and screening rounds',
+          'Work closely with core technical mentors on active products',
+          'Demonstrate continuous learning and team collaboration'
+        ],
+        perks: ['Pre-Placement Offer (PPO) Eligibility', 'Certificate of Merit', 'Mentor Guidance'],
+        deadline: driveForm.deadline,
+        isVerified: true,
+        verificationStatus: 'approved',
+        verificationEvidence: `AISHE ${aisheCode} Placement Drive Approval`,
+        opportunitySource: 'College Placement Cell',
+        creatorId: user.id,
+        creatorRole: 'college'
+      });
 
-    setFormSuccess('Campus drive posted and broadcasted to enrolled students successfully!');
-    setIsDriveModalOpen(false);
-    setTimeout(() => setFormSuccess(null), 4000);
+      setFormSuccess('Campus drive posted and broadcasted to enrolled students successfully!');
+      setIsDriveModalOpen(false);
+      setTimeout(() => setFormSuccess(null), 4000);
+    } catch (err: any) {
+      setFormError(err?.message || 'Failed to post campus placement drive.');
+    }
   };
 
   const filteredStudents = students.filter(s => {
@@ -206,6 +216,13 @@ export const CollegePortal: React.FC = () => {
         </div>
       )}
 
+      {formError && (
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-sm flex items-center gap-3 animate-fadeIn">
+          <AlertCircle className="w-5 h-5 text-rose-600 flex-shrink-0" />
+          <span>{formError}</span>
+        </div>
+      )}
+
       {/* Navigation Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 overflow-x-auto pb-1 text-sm font-semibold">
         <button
@@ -263,10 +280,10 @@ export const CollegePortal: React.FC = () => {
                 </span>
               </div>
               <div className="text-2xl font-black text-slate-900 dark:text-white">
-                {analytics?.totalEnrolledStudents || students.length || 428}
+                {analytics?.enrolledStudents ?? students.length}
               </div>
-              <p className="text-xs text-emerald-600 font-semibold mt-1 flex items-center gap-1">
-                <span>↑ 12%</span> from last academic semester
+              <p className="text-xs text-slate-500 dark:text-slate-400 font-semibold mt-1">
+                Verified students linked to institution
               </p>
             </div>
 
@@ -278,10 +295,10 @@ export const CollegePortal: React.FC = () => {
                 </span>
               </div>
               <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400">
-                {analytics?.placementRatePercentage || 84.6}%
+                {analytics?.placementRatePercentage ?? 0}%
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                {analytics?.totalPlacedStudents || 162} students with accepted offers
+                {analytics?.studentsPlaced ?? 0} students with accepted offers
               </p>
             </div>
 
@@ -293,25 +310,25 @@ export const CollegePortal: React.FC = () => {
                 </span>
               </div>
               <div className="text-2xl font-black text-slate-900 dark:text-white">
-                {analytics?.activeCampusDrives || collegeDrives.length || 18}
+                {analytics?.activeCampusDrives ?? collegeDrives.length}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Across IT, Core, and Management
+                Active institutional & partner drives
               </p>
             </div>
 
             <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Highest Package</span>
+                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Applications & Interviews</span>
                 <span className="p-2 rounded-lg bg-purple-50 dark:bg-purple-950/50 text-purple-600">
-                  <IndianRupee className="w-4 h-4" />
+                  <Award className="w-4 h-4" />
                 </span>
               </div>
               <div className="text-2xl font-black text-purple-600 dark:text-purple-400">
-                ₹18.5 LPA
+                {analytics?.totalApplications ?? collegeApplications.length}
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Avg: ₹6.8 LPA | Avg Stipend: ₹25k/mo
+                {analytics?.studentsInterviewing ?? 0} interviewing • {analytics?.studentsShortlisted ?? 0} shortlisted
               </p>
             </div>
           </div>
@@ -323,65 +340,82 @@ export const CollegePortal: React.FC = () => {
                 <GraduationCap className="w-5 h-5 text-orange-500" />
                 Branch-Wise Placement Progress
               </h2>
-              <div className="space-y-4">
-                {[
-                  { branch: 'Computer Science & Engineering', placed: 88, total: 95, pct: 92 },
-                  { branch: 'Information Technology', placed: 74, total: 85, pct: 87 },
-                  { branch: 'Electronics & Communication', placed: 58, total: 75, pct: 77 },
-                  { branch: 'Mechanical Engineering', placed: 42, total: 60, pct: 70 },
-                  { branch: 'Electrical Engineering', placed: 36, total: 55, pct: 65 },
-                ].map((item, idx) => (
-                  <div key={idx} className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs font-semibold">
-                      <span className="text-slate-700 dark:text-slate-300">{item.branch}</span>
-                      <span className="text-slate-500 dark:text-slate-400 font-mono">
-                        {item.placed}/{item.total} Placed ({item.pct}%)
-                      </span>
+              {(() => {
+                const branchMap = new Map<string, { total: number; placed: number }>();
+                students.forEach((s) => {
+                  const key = s.branch || s.course || 'General';
+                  const cur = branchMap.get(key) || { total: 0, placed: 0 };
+                  cur.total += 1;
+                  if (s.placed) cur.placed += 1;
+                  branchMap.set(key, cur);
+                });
+                const entries = Array.from(branchMap.entries());
+                if (entries.length === 0) {
+                  return (
+                    <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
+                      No students enrolled for {collegeName} yet. Branch metrics will appear automatically as students register.
                     </div>
-                    <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full"
-                        style={{ width: `${item.pct}%` }}
-                      ></div>
-                    </div>
+                  );
+                }
+                return (
+                  <div className="space-y-4">
+                    {entries.map(([branchName, counts]) => {
+                      const pct = counts.total > 0 ? Math.round((counts.placed / counts.total) * 100) : 0;
+                      return (
+                        <div key={branchName} className="space-y-1.5">
+                          <div className="flex items-center justify-between text-xs font-semibold">
+                            <span className="text-slate-700 dark:text-slate-300">{branchName}</span>
+                            <span className="text-slate-500 dark:text-slate-400 font-mono">
+                              {counts.placed}/{counts.total} Placed ({pct}%)
+                            </span>
+                          </div>
+                          <div className="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-orange-500 to-amber-500 rounded-full"
+                              style={{ width: `${pct}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </div>
 
             <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm">
               <h2 className="text-base font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
                 <Building className="w-5 h-5 text-blue-500" />
-                Top Institutional Corporate Partners
+                Active Partner Drives & Employers
               </h2>
-              <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                {[
-                  { name: 'BharatTech Innovations', hires: 24, avgStipend: '₹28,000/mo', verified: true },
-                  { name: 'Tata Consultancy Services', hires: 32, avgStipend: '₹22,000/mo', verified: true },
-                  { name: 'Infosys Springboard', hires: 18, avgStipend: '₹20,000/mo', verified: true },
-                  { name: 'National Informatics Centre (NIC)', hires: 12, avgStipend: '₹25,000/mo', verified: true },
-                  { name: 'DataVyuha AI Labs', hires: 9, avgStipend: '₹35,000/mo', verified: true }
-                ].map((comp, idx) => (
-                  <div key={idx} className="py-3 flex items-center justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-slate-900 dark:text-white text-sm">{comp.name}</span>
-                        {comp.verified && (
-                          <span className="inline-flex items-center gap-0.5 text-[11px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full">
-                            <ShieldCheck className="w-3 h-3" /> MoE Partner
-                          </span>
-                        )}
+              {collegeDrives.length === 0 && collegeApplications.length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
+                  No campus partner drives posted yet. Click &quot;Post Campus Drive&quot; above to add an opportunity.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {collegeDrives.slice(0, 5).map((drive) => (
+                    <div key={drive.id} className="py-3 flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-slate-900 dark:text-white text-sm">{drive.company}</span>
+                          {drive.isVerified && (
+                            <span className="inline-flex items-center gap-0.5 text-[11px] font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-full">
+                              <ShieldCheck className="w-3 h-3" /> Verified
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">
+                          {drive.title}
+                        </span>
                       </div>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {comp.hires} campus hires this cycle
+                      <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
+                        {drive.stipend}
                       </span>
                     </div>
-                    <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
-                      {comp.avgStipend}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -446,21 +480,24 @@ export const CollegePortal: React.FC = () => {
                             </div>
                           </div>
                         </td>
-                        <td className="px-5 py-3.5 font-mono text-xs">{st.rollNumber || '2023CSB1042'}</td>
+                        <td className="px-5 py-3.5 font-mono text-xs">{st.rollNumber || '—'}</td>
                         <td className="px-5 py-3.5">
-                          <div className="text-xs font-semibold">{st.branch || 'CSE'}</div>
-                          <div className="text-[11px] text-slate-500">Graduating {st.graduationYear || '2026'}</div>
+                          <div className="text-xs font-semibold">{st.branch || st.course || '—'}</div>
+                          <div className="text-[11px] text-slate-500">{st.graduationYear ? `Graduating ${st.graduationYear}` : '—'}</div>
                         </td>
                         <td className="px-5 py-3.5 font-bold font-mono text-emerald-600 dark:text-emerald-400">
-                          {st.cgpa || '8.8'} / 10
+                          {st.cgpa ? `${st.cgpa} / 10` : '—'}
                         </td>
                         <td className="px-5 py-3.5">
                           <div className="flex flex-wrap gap-1 max-w-xs">
-                            {(st.skills || ['React', 'JavaScript', 'Python']).slice(0, 3).map((sk: string, sIdx: number) => (
+                            {(st.skills || []).slice(0, 3).map((sk: string, sIdx: number) => (
                               <span key={sIdx} className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
                                 {sk}
                               </span>
                             ))}
+                            {(!st.skills || st.skills.length === 0) && (
+                              <span className="text-[11px] text-slate-400">—</span>
+                            )}
                           </div>
                         </td>
                         <td className="px-5 py-3.5">
@@ -663,7 +700,7 @@ export const CollegePortal: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. BharatTech / Placement Consortium"
+                    placeholder="e.g. Partner Organization Name"
                     value={driveForm.company}
                     onChange={e => setDriveForm({ ...driveForm, company: e.target.value })}
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-500"
@@ -801,37 +838,43 @@ export const CollegePortal: React.FC = () => {
                 <div>
                   <h4 className="font-bold text-slate-900 dark:text-white text-base">{selectedStudent.name}</h4>
                   <p className="text-xs text-slate-500">{selectedStudent.email}</p>
-                  <p className="text-xs font-mono font-bold text-emerald-600 mt-0.5">CGPA: {selectedStudent.cgpa || '8.8'} / 10</p>
+                  <p className="text-xs font-mono font-bold text-emerald-600 mt-0.5">
+                    {selectedStudent.cgpa ? `CGPA: ${selectedStudent.cgpa} / 10` : 'CGPA: Not specified'}
+                  </p>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800 text-xs">
                 <div>
                   <span className="text-slate-400 font-semibold">Roll Number:</span>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{selectedStudent.rollNumber || '2023CSB1042'}</p>
+                  <p className="font-bold text-slate-800 dark:text-slate-200">{selectedStudent.rollNumber || '—'}</p>
                 </div>
                 <div>
                   <span className="text-slate-400 font-semibold">Branch:</span>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{selectedStudent.branch || 'CSE'}</p>
+                  <p className="font-bold text-slate-800 dark:text-slate-200">{selectedStudent.branch || selectedStudent.course || '—'}</p>
                 </div>
                 <div>
                   <span className="text-slate-400 font-semibold">Graduation Year:</span>
-                  <p className="font-bold text-slate-800 dark:text-slate-200">{selectedStudent.graduationYear || '2026'}</p>
+                  <p className="font-bold text-slate-800 dark:text-slate-200">{selectedStudent.graduationYear || '—'}</p>
                 </div>
                 <div>
                   <span className="text-slate-400 font-semibold">Status:</span>
-                  <p className="font-bold text-emerald-600">Actively Seeking Placement</p>
+                  <p className="font-bold text-emerald-600">{selectedStudent.placementStatus || 'Enrolled'}</p>
                 </div>
               </div>
 
               <div>
                 <h5 className="font-bold text-slate-800 dark:text-slate-200 text-xs mb-2">Verified Skill Stack</h5>
                 <div className="flex flex-wrap gap-1.5">
-                  {(selectedStudent.skills || ['React', 'JavaScript', 'Node.js', 'Git']).map((sk: string, idx: number) => (
-                    <span key={idx} className="px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                      {sk}
-                    </span>
-                  ))}
+                  {(selectedStudent.skills && selectedStudent.skills.length > 0) ? (
+                    selectedStudent.skills.map((sk: string, idx: number) => (
+                      <span key={idx} className="px-2.5 py-1 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        {sk}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-slate-400">No skills added by student yet.</span>
+                  )}
                 </div>
               </div>
 

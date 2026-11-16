@@ -64,18 +64,18 @@ export const AdminDashboard: React.FC = () => {
   } = useApp();
 
   const [stats, setStats] = useState({
-    totalStudents: 1,
-    totalColleges: 1,
-    totalRecruiters: 1,
-    totalAdmins: 1,
-    totalUsers: 3,
-    activeSessions: 2,
-    totalJobs: 18,
+    totalStudents: 0,
+    totalColleges: 0,
+    totalRecruiters: 0,
+    totalAdmins: 0,
+    totalUsers: 0,
+    activeSessions: 0,
+    totalJobs: 0,
     pendingOpportunities: 0,
-    pendingVerifications: 2,
-    totalApplications: 142,
-    totalCertificatesIssued: 89,
-    activeToday: 48,
+    pendingVerifications: 0,
+    totalApplications: 0,
+    totalCertificatesIssued: 0,
+    activeToday: 0,
   });
 
   const [usersList, setUsersList] = useState<any[]>([]);
@@ -90,6 +90,7 @@ export const AdminDashboard: React.FC = () => {
   const [activeAdminTab, setActiveAdminTab] = useState<'overview' | 'integrations' | 'verifications' | 'users' | 'jobs' | 'courses' | 'applications' | 'reported' | 'security'>('overview');
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
 
   // New Job Modal Form State
@@ -107,26 +108,27 @@ export const AdminDashboard: React.FC = () => {
   const loadData = async () => {
     if (!authToken) return;
     setIsLoading(true);
+    setErrorMsg(null);
     try {
       const [statsData, usersData, logsData, reportsData, verifData, sourcesData, syncLogsData] = await Promise.all([
-        fetchAdminStatsApi(authToken).catch(() => stats),
-        fetchAdminUsersApi(authToken).catch(() => ({ users: [] })),
-        fetchAdminAuditLogsApi(authToken).catch(() => ({ auditLogs: [] })),
-        fetchReportedJobsApi(authToken).catch(() => ({ reports: [] })),
-        fetchPendingVerificationsApi(authToken).catch(() => ({ requests: [] })),
-        fetchIntegrationSourcesApi(authToken).catch(() => ({ sources: [] })),
-        fetchSyncLogsApi(authToken).catch(() => ({ logs: [] }))
+        fetchAdminStatsApi(authToken),
+        fetchAdminUsersApi(authToken),
+        fetchAdminAuditLogsApi(authToken),
+        fetchReportedJobsApi(authToken),
+        fetchPendingVerificationsApi(authToken),
+        fetchIntegrationSourcesApi(authToken),
+        fetchSyncLogsApi(authToken)
       ]);
 
       if (statsData) setStats(statsData);
       if (usersData?.users) setUsersList(usersData.users);
       if (logsData?.auditLogs) setAuditLogs(logsData.auditLogs);
-      if (reportsData?.reports) setReportedJobs(reportsData.reports);
+      setReportedJobs(reportsData?.reportedJobs || reportsData?.reports || []);
       if (verifData?.requests) setVerificationRequests(verifData.requests);
       if (sourcesData?.sources) setIntegrationSources(sourcesData.sources);
       if (syncLogsData?.logs) setSyncLogs(syncLogsData.logs);
-    } catch (err) {
-      console.warn('Failed to load admin data:', err);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to load live administrative telemetry.');
     } finally {
       setIsLoading(false);
     }
@@ -138,6 +140,7 @@ export const AdminDashboard: React.FC = () => {
 
   const handleToggleUserStatus = async (targetUserId: string, currentStatus: string) => {
     if (!authToken) return;
+    setErrorMsg(null);
     const nextStatus = currentStatus === 'suspended' ? 'active' : 'suspended';
     try {
       await updateUserStatusApi(authToken, targetUserId, nextStatus);
@@ -145,26 +148,28 @@ export const AdminDashboard: React.FC = () => {
       loadData();
       setTimeout(() => setStatusMsg(null), 2500);
     } catch (err: any) {
-      setStatusMsg(err.message || 'Failed to update user status');
-      setTimeout(() => setStatusMsg(null), 3500);
+      setErrorMsg(err.message || 'Failed to update user status');
+      setTimeout(() => setErrorMsg(null), 4000);
     }
   };
 
   const handleReportAction = async (id: string, action: 'resolve' | 'dismiss') => {
     if (!authToken) return;
+    setErrorMsg(null);
     try {
       await actionReportedJobApi(authToken, id, action);
       setStatusMsg(`Report ${action === 'resolve' ? 'marked resolved (delisted)' : 'dismissed'}.`);
       loadData();
       setTimeout(() => setStatusMsg(null), 2500);
     } catch (err: any) {
-      setStatusMsg(err.message || 'Failed to update report');
-      setTimeout(() => setStatusMsg(null), 3500);
+      setErrorMsg(err.message || 'Failed to update report');
+      setTimeout(() => setErrorMsg(null), 4000);
     }
   };
 
   const handleVerificationAction = async (item: VerificationRequestItem, action: 'approve' | 'reject') => {
     if (!authToken) return;
+    setErrorMsg(null);
     try {
       await actionVerificationApi(authToken, {
         requestId: item.id,
@@ -177,22 +182,27 @@ export const AdminDashboard: React.FC = () => {
       loadData();
       setTimeout(() => setStatusMsg(null), 3000);
     } catch (err: any) {
-      setStatusMsg(err.message || 'Failed to process verification request');
-      setTimeout(() => setStatusMsg(null), 3500);
+      setErrorMsg(err.message || 'Failed to process verification request');
+      setTimeout(() => setErrorMsg(null), 4000);
     }
   };
 
   const handleTriggerSync = async (sourceId?: string) => {
     if (!authToken) return;
     setIsSyncingSource(sourceId || 'all');
+    setErrorMsg(null);
     try {
       const res = await triggerDataSyncApi(authToken, sourceId);
-      setStatusMsg(`Data sync completed: ${res.totalFetched || 0} items fetched, ${res.totalInserted || 0} new, ${res.totalUpdated || 0} updated.`);
+      const resultList = Array.isArray(res?.results) ? res.results : res?.results ? [res.results] : [];
+      const totalFetched = res?.totalFetched ?? resultList.reduce((sum: number, r: any) => sum + (r?.fetchedCount || 0), 0);
+      const totalInserted = res?.totalInserted ?? resultList.reduce((sum: number, r: any) => sum + (r?.insertedCount || 0), 0);
+      const totalUpdated = res?.totalUpdated ?? resultList.reduce((sum: number, r: any) => sum + (r?.updatedCount || 0), 0);
+      setStatusMsg(`Data sync completed: ${totalFetched} items fetched, ${totalInserted} new, ${totalUpdated} updated.`);
       await loadData();
       setTimeout(() => setStatusMsg(null), 3500);
     } catch (err: any) {
-      setStatusMsg(err.message || 'Failed to trigger data sync');
-      setTimeout(() => setStatusMsg(null), 3500);
+      setErrorMsg(err.message || 'Failed to trigger data sync');
+      setTimeout(() => setErrorMsg(null), 4000);
     } finally {
       setIsSyncingSource(null);
     }
@@ -200,53 +210,61 @@ export const AdminDashboard: React.FC = () => {
 
   const handleToggleSource = async (sourceId: string, currentEnabled: boolean) => {
     if (!authToken) return;
+    setErrorMsg(null);
     try {
       await toggleIntegrationSourceApi(authToken, sourceId, !currentEnabled);
       setStatusMsg(`Integration adapter "${sourceId}" is now ${!currentEnabled ? 'Active' : 'Paused'}.`);
       await loadData();
       setTimeout(() => setStatusMsg(null), 2500);
     } catch (err: any) {
-      setStatusMsg(err.message || 'Failed to toggle source status');
-      setTimeout(() => setStatusMsg(null), 3500);
+      setErrorMsg(err.message || 'Failed to toggle source status');
+      setTimeout(() => setErrorMsg(null), 4000);
     }
   };
 
-  const handleCreateJob = (e: React.FormEvent) => {
+  const handleCreateJob = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newJobTitle.trim() || !newJobCompany.trim()) return;
+    setErrorMsg(null);
 
-    addJob({
-      title: newJobTitle.trim(),
-      company: newJobCompany.trim(),
-      companyLogo: 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?auto=format&fit=crop&w=150&q=80',
-      location: newJobLocation.trim(),
-      city: newJobLocation.split(',')[0].trim(),
-      coordinates: { lat: 12.9716, lng: 77.5946 },
-      type: newJobType,
-      category: newJobCategory,
-      stipend: newJobStipend.trim(),
-      stipendAmount: 18000,
-      duration: newJobDuration.trim(),
-      requiredSkills: newJobSkills.split(',').map(s => s.trim()).filter(Boolean),
-      description: newJobDesc.trim() || 'Work with senior engineers on live products and scalable systems.',
-      responsibilities: ['Assist in feature development', 'Participate in team agile sprints'],
-      perks: ['Certificate of Completion', 'Pre-Placement Offer (PPO)', 'Mentorship'],
-      deadline: '2026-12-31',
-      isGovernmentSponsored: newJobCategory === 'Government',
-      isVerified: true,
-      verificationStatus: 'approved',
-      verificationEvidence: 'Admin Verified Institutional Listing',
-      opportunitySource: newJobCategory === 'Government' ? 'National Career Service (NCS)' : 'Direct Employer',
-      creatorId: user.id,
-      creatorRole: 'admin'
-    });
+    try {
+      const publishedTitle = newJobTitle.trim();
+      await addJob({
+        title: publishedTitle,
+        company: newJobCompany.trim(),
+        companyLogo: 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?auto=format&fit=crop&w=150&q=80',
+        location: newJobLocation.trim(),
+        city: newJobLocation.split(',')[0].trim(),
+        coordinates: { lat: 12.9716, lng: 77.5946 },
+        type: newJobType,
+        category: newJobCategory,
+        stipend: newJobStipend.trim(),
+        stipendAmount: 18000,
+        duration: newJobDuration.trim(),
+        requiredSkills: newJobSkills.split(',').map(s => s.trim()).filter(Boolean),
+        description: newJobDesc.trim() || 'Work with senior engineers on live products and scalable systems.',
+        responsibilities: ['Assist in feature development', 'Participate in team agile sprints'],
+        perks: ['Certificate of Completion', 'Pre-Placement Offer (PPO)', 'Mentorship'],
+        deadline: '2026-12-31',
+        isGovernmentSponsored: newJobCategory === 'Government',
+        isVerified: true,
+        verificationStatus: 'approved',
+        verificationEvidence: 'Admin Verified Institutional Listing',
+        opportunitySource: newJobCategory === 'Government' ? 'National Career Service (NCS)' : 'Direct Employer',
+        creatorId: user.id,
+        creatorRole: 'admin'
+      });
 
-    setStatusMsg(`New internship "${newJobTitle}" successfully published.`);
-    setShowAddJobModal(false);
-    setNewJobTitle('');
-    setNewJobCompany('');
-    setNewJobDesc('');
-    setTimeout(() => setStatusMsg(null), 3000);
+      setStatusMsg(`New internship "${publishedTitle}" successfully published.`);
+      setShowAddJobModal(false);
+      setNewJobTitle('');
+      setNewJobCompany('');
+      setNewJobDesc('');
+      setTimeout(() => setStatusMsg(null), 3000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to publish opportunity.');
+      setTimeout(() => setErrorMsg(null), 4000);
+    }
   };
 
   const filteredUsers = usersList.filter(u => {
@@ -298,8 +316,15 @@ export const AdminDashboard: React.FC = () => {
 
       {statusMsg && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold rounded-2xl flex items-center gap-2 animate-in fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{statusMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold rounded-2xl flex items-center gap-2 animate-in fade-in">
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>{errorMsg}</span>
         </div>
       )}
 
@@ -324,7 +349,7 @@ export const AdminDashboard: React.FC = () => {
           }`}
         >
           <Database className="w-3.5 h-3.5" />
-          <span>Data Integrations ({integrationSources.length || 3})</span>
+          <span>Data Integrations ({integrationSources.length})</span>
         </button>
         <button
           onClick={() => setActiveAdminTab('verifications')}
@@ -411,7 +436,7 @@ export const AdminDashboard: React.FC = () => {
                   <GraduationCap className="w-4 h-4" />
                 </div>
               </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{stats.totalStudents || 12480}</div>
+              <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{stats.totalStudents ?? 0}</div>
               <div className="text-[11px] text-emerald-600 font-semibold mt-1">Verified KYC active</div>
             </div>
 
@@ -422,7 +447,7 @@ export const AdminDashboard: React.FC = () => {
                   <Building2 className="w-4 h-4" />
                 </div>
               </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{stats.totalRecruiters || 340}</div>
+              <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{stats.totalRecruiters ?? 0}</div>
               <div className="text-[11px] text-purple-600 font-semibold mt-1">Verified hiring partners</div>
             </div>
 
@@ -444,7 +469,7 @@ export const AdminDashboard: React.FC = () => {
                   <Award className="w-4 h-4" />
                 </div>
               </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{stats.totalCertificatesIssued || 89}</div>
+              <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{stats.totalCertificatesIssued ?? 0}</div>
               <div className="text-[11px] text-emerald-600 font-semibold mt-1">QR verifiable credentials</div>
             </div>
           </div>
@@ -534,7 +559,7 @@ export const AdminDashboard: React.FC = () => {
             <div className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xs">
               <span className="text-[11px] font-semibold text-slate-500">Active Adapters</span>
               <div className="text-xl font-black text-slate-900 dark:text-white mt-1">
-                {integrationSources.filter(s => s.enabled).length || 3} of {integrationSources.length || 3}
+                {integrationSources.filter(s => s.enabled).length} of {integrationSources.length}
               </div>
               <span className="text-[10px] text-emerald-600 font-bold">All connectors operational</span>
             </div>
@@ -903,7 +928,9 @@ export const AdminDashboard: React.FC = () => {
                     <tr key={u.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-750 transition-colors">
                       <td className="py-3 px-3">
                         <div className="font-bold text-slate-900 dark:text-white">{u.name}</div>
-                        <div className="text-[11px] text-slate-500">{u.email} • +91 {u.phone}</div>
+                        <div className="text-[11px] text-slate-500">
+                          {u.email || 'No email'}{u.phone ? ` • +91 ${u.phone}` : ''}
+                        </div>
                       </td>
                       <td className="py-3 px-3">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full capitalize ${
@@ -917,7 +944,7 @@ export const AdminDashboard: React.FC = () => {
                         </span>
                       </td>
                       <td className="py-3 px-3 text-slate-600 dark:text-slate-300">
-                        {u.college || u.institution || u.companyName || 'University of Delhi'}
+                        {u.college || u.institution || u.companyName || 'Not specified'}
                       </td>
                       <td className="py-3 px-3">
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
@@ -1090,7 +1117,14 @@ export const AdminDashboard: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <select
                       value={app.status}
-                      onChange={(e) => updateApplicationStatus(app.id, e.target.value as any)}
+                      onChange={async (e) => {
+                        setErrorMsg(null);
+                        try {
+                          await updateApplicationStatus(app.id, e.target.value as any);
+                        } catch (err: any) {
+                          setErrorMsg(err?.message || 'Failed to update application status');
+                        }
+                      }}
                       className="px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold outline-none bg-white dark:bg-slate-800 cursor-pointer"
                     >
                       <option value="Applied">Applied</option>
@@ -1417,12 +1451,18 @@ export const AdminDashboard: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const deletedTitle = jobToDelete.title;
-                  deleteJob(jobToDelete.id);
+                onClick={async () => {
+                  const target = jobToDelete;
                   setJobToDelete(null);
-                  setStatusMsg(`Removed "${deletedTitle}"`);
-                  setTimeout(() => setStatusMsg(null), 2500);
+                  setErrorMsg(null);
+                  try {
+                    await deleteJob(target.id);
+                    setStatusMsg(`Removed "${target.title}"`);
+                    setTimeout(() => setStatusMsg(null), 2500);
+                  } catch (err: any) {
+                    setErrorMsg(err?.message || 'Failed to remove listing');
+                    setTimeout(() => setErrorMsg(null), 4000);
+                  }
                 }}
                 className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
               >

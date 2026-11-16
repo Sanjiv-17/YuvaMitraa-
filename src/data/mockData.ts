@@ -1,39 +1,4 @@
-import { Job, Course, GovernmentScheme, UserProfile } from '../types';
-
-export const INITIAL_USER: UserProfile = {
-  id: 'usr-default',
-  name: 'Yuva Member',
-  email: '',
-  phone: '',
-  role: 'student',
-  photoUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-  education: 'B.Tech in Computer Science / IT',
-  institution: '',
-  graduationYear: '2026',
-  skills: ['JavaScript', 'HTML5', 'CSS3', 'React', 'Python Basics', 'Git', 'Problem Solving', 'Public Speaking'],
-  interests: ['Frontend Web Development', 'AI Tools', 'Startups', 'Fintech', 'Youth Leadership'],
-  location: 'New Delhi, India',
-  coordinates: {
-    lat: 28.6315,
-    lng: 77.2167,
-  },
-  resumeFileName: '',
-  resumeText: '',
-  streakDays: 5,
-  xpPoints: 1250,
-  badges: ['First Step', 'Resume Ready', 'Fast Learner', 'Streak Pioneer'],
-  savedJobIds: ['job-1', 'job-3'],
-  enrolledCourses: [
-    {
-      courseId: 'course-1',
-      completedModuleIds: ['m1-1', 'm1-2'],
-    },
-    {
-      courseId: 'course-7',
-      completedModuleIds: ['m7-1'],
-    }
-  ],
-};
+import { Job, Course, GovernmentScheme } from '../types';
 
 export const SAMPLE_JOBS: Job[] = [
   {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BookOpen, 
   Award, 
@@ -17,8 +17,12 @@ export const LearnSection: React.FC<{ initialSubTab?: 'catalog' | 'player' | 'ce
 }) => {
   const { certificates, selectedCourseForPlayer, setSelectedCourseForPlayer, user } = useApp();
   const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'player' | 'certificates'>(
-    selectedCourseForPlayer ? 'player' : initialSubTab
+    selectedCourseForPlayer && initialSubTab === 'player' ? 'player' : initialSubTab
   );
+
+  useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -42,7 +46,7 @@ export const LearnSection: React.FC<{ initialSubTab?: 'catalog' | 'player' | 'ce
           <div className="flex items-center gap-3">
             <div className="px-3.5 py-2 rounded-2xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-center">
               <span className="block text-xs text-[#0284C7]">Enrolled</span>
-              <span className="text-base font-bold text-[#0284C7]">{user.enrolledCourses?.length || 1}</span>
+              <span className="text-base font-bold text-[#0284C7]">{user.enrolledCourses?.length || 0}</span>
             </div>
             <div className="px-3.5 py-2 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-center">
               <span className="block text-xs text-amber-600">Certificates</span>

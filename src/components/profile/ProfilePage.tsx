@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   User, 
   Camera, 
@@ -24,10 +24,20 @@ import {
   LogOut,
   ShieldAlert,
   Loader2,
-  Briefcase
+  Briefcase,
+  RefreshCw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { openExternalUrl } from '../../utils/navigation';
+import { extractPdfResumeText } from '../../utils/resumeParser';
+import {
+  auth,
+  onAuthStateChanged,
+  syncUserProfileToFirestore,
+  saveExtractedResumeToFirestore,
+  getSavedResumeFromFirestore,
+  deleteSavedResumeFromFirestore
+} from '../../services/firebase';
 import { 
   uploadProfilePhotoApi, 
   uploadResumeApi, 
@@ -45,43 +55,112 @@ export const ProfilePage: React.FC = () => {
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [phone, setPhone] = useState(user?.phone || '');
-  const [age, setAge] = useState<number | string>(user?.age ?? 21);
-  const [education, setEducation] = useState(user?.education || 'Bachelor of Technology (B.Tech)');
-  const [institution, setInstitution] = useState(user?.institution || user?.college || 'National Institute of Technology Delhi');
-  const [branch, setBranch] = useState(user?.branch || 'Computer Science & Engineering');
-  const [rollNumber, setRollNumber] = useState(user?.rollNumber || '2023CSB1042');
-  const [cgpa, setCgpa] = useState(user?.cgpa || '8.8');
-  const [graduationYear, setGraduationYear] = useState(user?.graduationYear || '2026');
-  const [location, setLocation] = useState(user?.location || 'New Delhi, Delhi');
+  const [age, setAge] = useState<number | string>(user?.age ?? '');
+  const [education, setEducation] = useState(user?.education || '');
+  const [institution, setInstitution] = useState(user?.institution || user?.college || '');
+  const [branch, setBranch] = useState(user?.branch || '');
+  const [rollNumber, setRollNumber] = useState(user?.rollNumber || '');
+  const [cgpa, setCgpa] = useState(user?.cgpa || '');
+  const [graduationYear, setGraduationYear] = useState(user?.graduationYear || '');
+  const [location, setLocation] = useState(user?.location || '');
   const [skillsStr, setSkillsStr] = useState((user?.skills || []).join(', '));
   const [interestsStr, setInterestsStr] = useState((user?.interests || []).join(', '));
-  const [preferredRolesStr, setPreferredRolesStr] = useState((user?.preferredRoles || ['Software Engineer', 'Frontend Developer']).join(', '));
-  const [photoUrl, setPhotoUrl] = useState(user?.photoUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80');
-  const [resumeFileName, setResumeFileName] = useState(user?.resumeFileName || 'Resume.pdf');
+  const [preferredRolesStr, setPreferredRolesStr] = useState((user?.preferredRoles || []).join(', '));
+  const [photoUrl, setPhotoUrl] = useState(user?.photoUrl || '');
+  const [resumeFileName, setResumeFileName] = useState(user?.resumeFileName || '');
   const [resumeText, setResumeText] = useState(user?.resumeText || '');
-  const [githubUrl, setGithubUrl] = useState(user?.githubUrl || 'https://github.com/profile');
-  const [linkedinUrl, setLinkedinUrl] = useState(user?.linkedinUrl || 'https://linkedin.com/in/profile');
-  const [portfolioUrl, setPortfolioUrl] = useState(user?.portfolioUrl || 'https://portfolio.dev');
+  const [resumeUpdatedAt, setResumeUpdatedAt] = useState(user?.resumeUpdatedAt || '');
+  const [githubUrl, setGithubUrl] = useState(user?.githubUrl || '');
+  const [linkedinUrl, setLinkedinUrl] = useState(user?.linkedinUrl || '');
+  const [portfolioUrl, setPortfolioUrl] = useState(user?.portfolioUrl || '');
+
+  // Client-side PDF resume extraction & Firestore status states
+  const [isReadingResume, setIsReadingResume] = useState(false);
+  const [isDeletingResume, setIsDeletingResume] = useState(false);
+  const [resumeSectionError, setResumeSectionError] = useState<string | null>(null);
+  const [resumeSectionSuccess, setResumeSectionSuccess] = useState<string | null>(null);
+  const [resumeSignInPrompt, setResumeSignInPrompt] = useState<string | null>(null);
 
   // Projects state
-  const [projects, setProjects] = useState<StudentProject[]>(user?.projects || [
-    {
-      id: 'proj-1',
-      title: 'YuvaMitraa AI Career Bridge',
-      description: 'Built a full-stack platform connecting students with verified employers, smart ATS feedback, and placement monitoring.',
-      technologies: ['React', 'TypeScript', 'Tailwind CSS', 'Node.js'],
-      githubLink: 'https://github.com/aaravsharma/yuvamitraa-bridge',
-      liveLink: 'https://yuvamitraa.gov.in'
-    }
-  ]);
+  const [projects, setProjects] = useState<StudentProject[]>(user?.projects || []);
   const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [newProject, setNewProject] = useState({
     title: '',
     description: '',
-    technologies: 'React, TypeScript, Node.js',
+    technologies: '',
     githubLink: '',
     liveLink: ''
   });
+
+  useEffect(() => {
+    setName(user?.name || '');
+    setEmail(user?.email || '');
+    setPhone(user?.phone || '');
+    setAge(user?.age ?? '');
+    setEducation(user?.education || '');
+    setInstitution(user?.institution || user?.college || '');
+    setBranch(user?.branch || '');
+    setRollNumber(user?.rollNumber || '');
+    setCgpa(user?.cgpa || '');
+    setGraduationYear(user?.graduationYear || '');
+    setLocation(user?.location || '');
+    setSkillsStr((user?.skills || []).join(', '));
+    setInterestsStr((user?.interests || []).join(', '));
+    setPreferredRolesStr((user?.preferredRoles || []).join(', '));
+    setPhotoUrl(user?.photoUrl || '');
+    setResumeFileName(user?.resumeFileName || '');
+    setResumeText(user?.resumeText || '');
+    setResumeUpdatedAt(user?.resumeUpdatedAt || '');
+    setGithubUrl(user?.githubUrl || '');
+    setLinkedinUrl(user?.linkedinUrl || '');
+    setPortfolioUrl(user?.portfolioUrl || '');
+    setProjects(user?.projects || []);
+  }, [
+    user?.id,
+    user?.resumeFileName,
+    user?.resumeText,
+    user?.resumeUpdatedAt
+  ]);
+
+  // Auto-fill Resume Content on load if signed-in user has a saved resume in users/{uid}/resume/current
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadSavedResume = async (uid: string) => {
+      try {
+        const saved = await getSavedResumeFromFirestore(uid);
+        if (cancelled) return;
+        if (saved && saved.text) {
+          setResumeFileName(saved.fileName || 'resume.pdf');
+          setResumeText(saved.text);
+          setResumeUpdatedAt(saved.updatedAt || '');
+          updateUser({
+            resumeFileName: saved.fileName,
+            resumeText: saved.text,
+            resumeUpdatedAt: saved.updatedAt,
+          });
+        }
+      } catch {
+        // Non-fatal read error
+      }
+    };
+
+    if (auth.currentUser) {
+      void loadSavedResume(auth.currentUser.uid);
+    }
+
+    const unsub = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        setResumeSignInPrompt(null);
+        void loadSavedResume(fbUser.uid);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
   
   // Status states
   const [isSaving, setIsSaving] = useState(false);
@@ -116,7 +195,7 @@ export const ProfilePage: React.FC = () => {
     if (email && phone) score += 15;
     if (education && institution) score += 15;
     if (skillsStr.length > 5) score += 15;
-    if (resumeText.length > 20) score += 10;
+    if (resumeText.trim().length > 20) score += 10;
     if (preferredRolesStr.length > 5) score += 10;
     return Math.min(100, score);
   };
@@ -131,16 +210,20 @@ export const ProfilePage: React.FC = () => {
       reader.onload = async (uploadEvent) => {
         if (uploadEvent.target?.result) {
           const dataUrl = uploadEvent.target.result as string;
-          setPhotoUrl(dataUrl);
-          updateUser({ photoUrl: dataUrl });
+          setErrorNotice(null);
           if (authToken) {
             try {
               await uploadProfilePhotoApi(authToken, dataUrl);
+              setPhotoUrl(dataUrl);
+              updateUser({ photoUrl: dataUrl });
               setSuccessNotice('Profile photo updated successfully!');
               setTimeout(() => setSuccessNotice(null), 3000);
             } catch (err: any) {
-              console.warn('Photo API upload notice:', err.message);
+              setErrorNotice(err?.message || 'Failed to upload profile photo.');
             }
+          } else {
+            setPhotoUrl(dataUrl);
+            updateUser({ photoUrl: dataUrl });
           }
         }
       };
@@ -148,33 +231,123 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
-  // Resume upload handler
+  // Client-side PDF extraction using pdf.js + Firestore text persistence
   const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setResumeFileName(file.name);
-      const reader = new FileReader();
-      reader.onload = async (uploadEvent) => {
-        if (uploadEvent.target?.result) {
-          const raw = uploadEvent.target.result as string;
-          const updatedResumeText = `${file.name.toUpperCase()}\nParsed content preview:\n${raw.slice(0, 400)}...\n\n${resumeText || ''}`;
-          setResumeText(updatedResumeText);
-          updateUser({
-            resumeFileName: file.name,
-            resumeText: updatedResumeText
-          });
-          if (authToken) {
-            try {
-              await uploadResumeApi(authToken, file.name, updatedResumeText);
-              setSuccessNotice(`Resume "${file.name}" uploaded and synced with backend.`);
-              setTimeout(() => setSuccessNotice(null), 3500);
-            } catch (err: any) {
-              console.warn('Resume sync notice:', err.message);
-            }
-          }
-        }
-      };
-      reader.readAsText(file);
+    const file = e.target.files?.[0];
+    // Reset input value so re-selecting the same PDF file triggers onChange again
+    e.target.value = '';
+    if (!file) return;
+
+    setErrorNotice(null);
+    setSuccessNotice(null);
+    setResumeSectionError(null);
+    setResumeSectionSuccess(null);
+    setResumeSignInPrompt(null);
+    setIsReadingResume(true);
+
+    try {
+      const extracted = await extractPdfResumeText(file);
+      const updatedAt = new Date().toISOString();
+
+      setResumeText(extracted.text);
+      setResumeFileName(extracted.fileName);
+      setResumeUpdatedAt(updatedAt);
+      setResumeSectionSuccess('Resume loaded ✓');
+
+      if (typeof auth.authStateReady === 'function') {
+        await auth.authStateReady();
+      }
+
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        updateUser({
+          resumeFileName: extracted.fileName,
+          resumeText: extracted.text,
+          resumeUpdatedAt: updatedAt,
+        });
+        setResumeSignInPrompt('Sign in to save your resume.');
+        return;
+      }
+
+      const saved = await saveExtractedResumeToFirestore(currentUser.uid, {
+        fileName: extracted.fileName,
+        text: extracted.text,
+        updatedAt,
+      });
+
+      setResumeFileName(saved.fileName);
+      setResumeText(saved.text);
+      setResumeUpdatedAt(saved.updatedAt);
+
+      updateUser({
+        resumeFileName: saved.fileName,
+        resumeText: saved.text,
+        resumeUpdatedAt: saved.updatedAt,
+      });
+
+      if (authToken) {
+        uploadResumeApi(authToken, {
+          resumeFileName: saved.fileName,
+          resumeText: saved.text,
+          resumeUpdatedAt: saved.updatedAt,
+        }).catch(() => {
+          // Non-fatal if Express session was reset; Firestore remains authoritative
+        });
+      }
+
+      setSuccessNotice('Resume loaded ✓');
+    } catch (err: any) {
+      const msg =
+        err?.message ||
+        'No readable text found in this PDF. Please paste your resume text manually in the Resume Content box.';
+      setResumeSectionError(msg);
+      setErrorNotice(msg);
+    } finally {
+      setIsReadingResume(false);
+    }
+  };
+
+  // Delete saved resume text from Firestore (users/{uid}/resume/current)
+  const handleDeleteResume = async () => {
+    setErrorNotice(null);
+    setSuccessNotice(null);
+    setResumeSectionError(null);
+    setResumeSectionSuccess(null);
+    setResumeSignInPrompt(null);
+    setIsDeletingResume(true);
+
+    try {
+      if (auth.currentUser) {
+        await deleteSavedResumeFromFirestore(auth.currentUser.uid);
+      }
+
+      setResumeFileName('');
+      setResumeText('');
+      setResumeUpdatedAt('');
+
+      updateUser({
+        resumeFileName: '',
+        resumeText: '',
+        resumeUpdatedAt: '',
+      });
+
+      if (authToken) {
+        uploadResumeApi(authToken, {
+          resumeFileName: '',
+          resumeText: '',
+          resumeUpdatedAt: '',
+        }).catch(() => {});
+      }
+
+      const deletedMsg = 'Saved resume removed from your account.';
+      setResumeSectionSuccess(deletedMsg);
+      setSuccessNotice(deletedMsg);
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to delete saved resume. Please try again.';
+      setResumeSectionError(msg);
+      setErrorNotice(msg);
+    } finally {
+      setIsDeletingResume(false);
     }
   };
 
@@ -187,54 +360,63 @@ export const ProfilePage: React.FC = () => {
     const parsedSkills = skillsStr.split(',').map(s => s.trim()).filter(Boolean);
     const parsedInterests = interestsStr.split(',').map(s => s.trim()).filter(Boolean);
     const parsedPreferredRoles = preferredRolesStr.split(',').map(s => s.trim()).filter(Boolean);
+    const parsedAge = age !== '' && Number(age) >= 13 && Number(age) <= 120 ? Number(age) : undefined;
 
     const updatedData = {
-      name,
-      email,
-      phone,
-      age: Number(age) || 21,
-      education,
-      institution,
-      college: institution,
-      branch,
-      rollNumber,
-      cgpa,
-      graduationYear,
-      location,
+      name: name.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      ...(parsedAge ? { age: parsedAge } : {}),
+      education: education.trim(),
+      institution: institution.trim(),
+      college: institution.trim(),
+      branch: branch.trim(),
+      rollNumber: rollNumber.trim(),
+      cgpa: cgpa.trim(),
+      graduationYear: graduationYear.trim(),
+      location: location.trim(),
       photoUrl,
       resumeFileName,
+      resumeUpdatedAt,
       resumeText,
       skills: parsedSkills,
       interests: parsedInterests,
       preferredRoles: parsedPreferredRoles,
       projects,
-      githubUrl,
-      linkedinUrl,
-      portfolioUrl
+      githubUrl: githubUrl.trim(),
+      linkedinUrl: linkedinUrl.trim(),
+      portfolioUrl: portfolioUrl.trim()
     };
 
-    updateUser(updatedData);
-
-    if (authToken) {
-      try {
-        await updateProfileApi(authToken, updatedData);
-      } catch (err: any) {
-        console.warn('Backend profile update note:', err.message);
+    try {
+      const saveTasks: Promise<any>[] = [];
+      if (authToken) {
+        saveTasks.push(updateProfileApi(authToken, updatedData));
       }
+      if (auth.currentUser) {
+        saveTasks.push(syncUserProfileToFirestore(auth.currentUser.uid, updatedData));
+      }
+      if (saveTasks.length > 0) {
+        await Promise.all(saveTasks);
+      }
+      updateUser(updatedData);
+      setIsSaved(true);
+      setSuccessNotice('Profile details saved successfully!');
+      setTimeout(() => {
+        setIsSaved(false);
+        setSuccessNotice(null);
+      }, 3000);
+    } catch (err: any) {
+      setErrorNotice(err?.message || 'Failed to save profile details. Please try again.');
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsSaving(false);
-    setIsSaved(true);
-    setSuccessNotice('Profile details saved successfully!');
-    setTimeout(() => {
-      setIsSaved(false);
-      setSuccessNotice(null);
-    }, 3000);
   };
 
   const handleSaveProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProject.title.trim()) return;
+    setErrorNotice(null);
     const proj: StudentProject = {
       id: `proj-${Date.now()}`,
       title: newProject.title.trim(),
@@ -243,16 +425,20 @@ export const ProfilePage: React.FC = () => {
       githubLink: newProject.githubLink.trim() || undefined,
       liveLink: newProject.liveLink.trim() || undefined
     };
-    const updated = [proj, ...projects];
-    setProjects(updated);
-    updateUser({ projects: updated });
-    if (authToken) {
-      saveStudentProjectApi(authToken, proj).catch(() => {});
+    try {
+      if (authToken) {
+        await saveStudentProjectApi(authToken, proj);
+      }
+      const updated = [proj, ...projects];
+      setProjects(updated);
+      updateUser({ projects: updated });
+      setShowAddProjectModal(false);
+      setNewProject({ title: '', description: '', technologies: '', githubLink: '', liveLink: '' });
+      setSuccessNotice('Project added to your portfolio successfully!');
+      setTimeout(() => setSuccessNotice(null), 3000);
+    } catch (err: any) {
+      setErrorNotice(err?.message || 'Failed to save project.');
     }
-    setShowAddProjectModal(false);
-    setNewProject({ title: '', description: '', technologies: 'React, TypeScript', githubLink: '', liveLink: '' });
-    setSuccessNotice('Project added to your portfolio successfully!');
-    setTimeout(() => setSuccessNotice(null), 3000);
   };
 
   // Change password handler
@@ -362,11 +548,11 @@ export const ProfilePage: React.FC = () => {
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 dark:bg-orange-950/40 text-[#FF7A00] font-bold text-xs rounded-xl border border-orange-200 dark:border-orange-800 shadow-2xs">
             <Flame className="w-4 h-4 fill-[#FF7A00]" />
-            <span>{user?.streakDays ?? 1}-Day Streak</span>
+            <span>{user?.streakDays ?? 0}-Day Streak</span>
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-50 dark:bg-sky-950/40 text-[#0284C7] font-bold text-xs rounded-xl border border-sky-200 dark:border-sky-800 shadow-2xs">
             <Award className="w-4 h-4" />
-            <span>{user?.xpPoints ?? 500} XP</span>
+            <span>{user?.xpPoints ?? 0} XP</span>
           </div>
         </div>
       </div>
@@ -463,11 +649,17 @@ export const ProfilePage: React.FC = () => {
           
           <div className="flex flex-col items-center space-y-2">
             <div className="relative group">
-              <img
-                src={photoUrl}
-                alt={name}
-                className="w-24 h-24 rounded-3xl object-cover border-2 border-orange-400 shadow-md ring-4 ring-orange-100 dark:ring-slate-700"
-              />
+              {photoUrl ? (
+                <img
+                  src={photoUrl}
+                  alt={name || 'Profile'}
+                  className="w-24 h-24 rounded-3xl object-cover border-2 border-orange-400 shadow-md ring-4 ring-orange-100 dark:ring-slate-700"
+                />
+              ) : (
+                <div className="w-24 h-24 rounded-3xl bg-[#FF7A00] text-white text-3xl font-black flex items-center justify-center border-2 border-orange-400 shadow-md ring-4 ring-orange-100 dark:ring-slate-700">
+                  {(name || 'Y').charAt(0).toUpperCase()}
+                </div>
+              )}
               <label className="absolute inset-0 bg-black/40 rounded-3xl flex flex-col items-center justify-center text-white text-[10px] font-bold opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
                 <Camera className="w-5 h-5 mb-1" />
                 <span>Change Photo</span>
@@ -511,7 +703,7 @@ export const ProfilePage: React.FC = () => {
             <p className="text-xs text-slate-400">{institution}</p>
 
             <div className="flex flex-wrap items-center justify-center md:justify-start gap-1.5 pt-2">
-              {(user?.badges || ['New Explorer', 'Profile Complete']).map((b, i) => (
+              {(user?.badges || []).map((b, i) => (
                 <span key={i} className="text-[10px] bg-orange-50 dark:bg-orange-950/60 text-[#FF7A00] border border-orange-200 dark:border-orange-800 px-2.5 py-0.5 rounded-lg font-bold shadow-2xs">
                   🎖️ {b}
                 </span>
@@ -883,44 +1075,132 @@ export const ProfilePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Resume Upload and Preview Section */}
+        {/* Resume PDF Text Extraction & Saved Content Section */}
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-700 pb-3">
             <div>
               <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                Uploaded Resume for 1-Click Applications & AI Review
+                Resume PDF &amp; Extracted Content
               </h3>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">Supported formats: PDF, DOCX, TXT</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Upload a PDF (up to 5 MB). Text is extracted on your device.
+              </p>
             </div>
 
-            <label className="px-4 py-2 rounded-xl bg-[#E6F4FF] dark:bg-sky-950 hover:bg-sky-100 text-[#0284C7] dark:text-sky-300 font-bold text-xs border border-sky-200 dark:border-sky-800 transition-colors flex items-center gap-1.5 cursor-pointer self-start sm:self-auto">
-              <Upload className="w-3.5 h-3.5" />
-              <span>Upload New File (PDF)</span>
+            <label
+              className={`px-4 py-2 rounded-xl bg-[#E6F4FF] dark:bg-sky-950 hover:bg-sky-100 text-[#0284C7] dark:text-sky-300 font-bold text-xs border border-sky-200 dark:border-sky-800 transition-colors flex items-center gap-1.5 self-start sm:self-auto ${
+                isReadingResume ? 'opacity-60 pointer-events-none' : 'cursor-pointer'
+              }`}
+            >
+              {isReadingResume ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : resumeFileName ? (
+                <RefreshCw className="w-3.5 h-3.5" />
+              ) : (
+                <Upload className="w-3.5 h-3.5" />
+              )}
+              <span>{isReadingResume ? 'Reading resume...' : resumeFileName ? 'Replace PDF Resume' : 'Select PDF Resume'}</span>
               <input
                 type="file"
-                accept=".pdf,.docx,.txt"
+                accept="application/pdf,.pdf"
                 onChange={handleResumeUpload}
+                disabled={isReadingResume}
                 className="hidden"
               />
             </label>
           </div>
 
-          <div className="flex items-center gap-3 p-3 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs">
-            <FileText className="w-5 h-5 text-[#FF7A00]" />
-            <div className="flex-1">
-              <span className="font-bold text-slate-800 dark:text-slate-200">{resumeFileName}</span>
-              <span className="text-[10px] text-slate-400 block">Ready for automated parsing & eligibility matching</span>
+          {/* Reading Resume Progress Indicator */}
+          {isReadingResume && (
+            <div className="p-3.5 rounded-2xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-xs font-bold text-sky-800 dark:text-sky-200 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-[#0284C7] shrink-0" />
+              <span>Reading resume...</span>
             </div>
+          )}
+
+          {/* Inline Success, Sign-In Prompt & Error Messages */}
+          {resumeSectionSuccess && !isReadingResume && (
+            <div className="p-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span className="font-semibold">{resumeSectionSuccess}</span>
+            </div>
+          )}
+
+          {resumeSignInPrompt && (
+            <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between gap-2">
+              <span className="font-semibold">{resumeSignInPrompt}</span>
+              <button
+                type="button"
+                onClick={() => setResumeSignInPrompt(null)}
+                className="text-amber-700 dark:text-amber-300 font-bold text-[11px] hover:underline shrink-0 cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {resumeSectionError && (
+            <div className="p-3 rounded-2xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-200 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span className="font-semibold">{resumeSectionError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResumeSectionError(null)}
+                className="text-red-700 dark:text-red-300 font-bold text-[11px] hover:underline shrink-0 cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* Saved Resume Summary Card */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-orange-100 dark:bg-orange-950/60 flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5 text-[#FF7A00]" />
+              </div>
+              <div className="min-w-0">
+                <span className="font-bold text-slate-800 dark:text-slate-200 block truncate">
+                  {resumeFileName
+                    ? `Saved resume: ${resumeFileName}`
+                    : 'No PDF resume loaded yet'}
+                </span>
+                <span className="text-[10px] text-slate-400 block">
+                  {resumeFileName
+                    ? `Upload a PDF (up to 5 MB). Text is extracted on your device.${
+                        resumeUpdatedAt ? ` • Updated ${new Date(resumeUpdatedAt).toLocaleDateString()}` : ''
+                      }`
+                    : 'Upload a PDF (up to 5 MB). Text is extracted on your device.'}
+                </span>
+              </div>
+            </div>
+
+            {(resumeFileName || resumeText.trim().length > 0) && (
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDeleteResume}
+                  disabled={isDeletingResume || isReadingResume}
+                  className="px-3 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 text-rose-600 dark:text-rose-300 font-bold text-[11px] border border-rose-200 dark:border-rose-800 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                >
+                  {isDeletingResume ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  <span>Delete</span>
+                </button>
+              </div>
+            )}
           </div>
 
           <div>
             <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-              Parsed Text Preview (Used by Gemini for Eligibility Checks):
+              Resume Content (Editable — Used for ATS &amp; Eligibility Checks):
             </label>
             <textarea
               rows={5}
               value={resumeText}
               onChange={(e) => setResumeText(e.target.value)}
+              placeholder="Upload a PDF to extract text automatically, or paste your resume text manually..."
               className="w-full p-3 text-xs font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-slate-200"
             />
           </div>
@@ -1267,6 +1547,7 @@ export const ProfilePage: React.FC = () => {
           </div>
         </div>
       )}
+
 
     </div>
   );

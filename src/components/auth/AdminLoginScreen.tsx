@@ -40,8 +40,9 @@ export const AdminLoginScreen: React.FC = () => {
       throw new Error('Firebase authentication session not found.');
     }
 
-    // Force reload user metadata so emailVerified is current
-    await fbUser.reload();
+    if (!fbUser.emailVerified) {
+      await fbUser.reload();
+    }
 
     if (!fbUser.emailVerified) {
       setNeedsEmailVerification(true);
@@ -51,11 +52,11 @@ export const AdminLoginScreen: React.FC = () => {
       );
     }
 
-    const idToken = await fbUser.getIdToken(true);
+    const idToken = await fbUser.getIdToken(false);
     const verifyRes = await verifyAdminClaimApi(idToken);
 
-    // Refresh ID token after Admin SDK sets custom claim admin: true
-    const refreshedTokenResult = await fbUser.getIdTokenResult(true);
+    // Only force-refresh token if server newly granted the custom claim
+    const refreshedTokenResult = await fbUser.getIdTokenResult(Boolean(verifyRes.claimGranted));
     if (refreshedTokenResult.claims?.admin !== true) {
       await signOutUser();
       throw Object.assign(

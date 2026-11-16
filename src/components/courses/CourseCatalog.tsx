@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BookOpen, 
   Search, 
@@ -27,10 +27,18 @@ import {
   RotateCcw,
   CheckCircle2,
   AlertCircle,
-  Cpu
+  Cpu,
+  Loader2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Course } from '../../types';
+import {
+  getPyodideStatus,
+  preloadPyodideRuntime,
+  runPythonTestsInWorker,
+  subscribePyodideStatus,
+  type PyodideLoadStatus,
+} from '../../services/pyodideRunner';
 
 interface CodingProblem {
   id: string;
@@ -376,22 +384,44 @@ export const CourseCatalog: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'All' | 'in-progress' | 'completed' | 'not-started'>('All');
   const [sortBy, setSortBy] = useState<'popular' | 'rating' | 'duration'>('popular');
   const [bookmarkedCourseIds, setBookmarkedCourseIds] = useState<string[]>(() => {
-    const saved = localStorage.getItem('ym_bookmarked_courses');
-    return saved ? JSON.parse(saved) : ['course-1', 'course-8'];
+    try {
+      const saved = localStorage.getItem('ym_bookmarked_courses');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
 
   // Coding Arena states
   const [selectedProblemId, setSelectedProblemId] = useState<string>('two-sum');
-  const [selectedLang, setSelectedLang] = useState<'python' | 'java' | 'javascript'>('python');
-  const [codeEditorContent, setCodeEditorContent] = useState<string>(CODING_PROBLEMS[0].starterCode.python);
+  const [selectedLang, setSelectedLang] = useState<'python' | 'java' | 'javascript'>('javascript');
+  const [codeEditorContent, setCodeEditorContent] = useState<string>(CODING_PROBLEMS[0].starterCode.javascript);
   const [isRunningTests, setIsRunningTests] = useState(false);
-  const [testResults, setTestResults] = useState<{ pass: boolean; log: string } | null>(null);
+  const [pyodideStatus, setPyodideStatus] = useState<PyodideLoadStatus>(() => getPyodideStatus());
+  const [testResults, setTestResults] = useState<{
+    pass: boolean;
+    log: string;
+    stdout?: string;
+    stderr?: string;
+    errorBanner?: string;
+    traceback?: string;
+    caseLines?: Array<{ passed: boolean; text: string; traceback?: string }>;
+    footer?: string;
+  } | null>(null);
   const [showHintModal, setShowHintModal] = useState(false);
   const [solvedProblemIds, setSolvedProblemIds] = useState<string[]>(() => {
-    const saved = localStorage.getItem('ym_solved_problems');
-    return saved ? JSON.parse(saved) : ['valid-palindrome'];
+    try {
+      const saved = localStorage.getItem('ym_solved_problems');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
   const [rewardClaimed, setRewardClaimed] = useState(false);
+
+  useEffect(() => {
+    return subscribePyodideStatus(setPyodideStatus);
+  }, []);
 
   const activeProblem = CODING_PROBLEMS.find(p => p.id === selectedProblemId) || CODING_PROBLEMS[0];
 
@@ -406,28 +436,184 @@ export const CourseCatalog: React.FC = () => {
     setSelectedLang(lang);
     setCodeEditorContent(activeProblem.starterCode[lang]);
     setTestResults(null);
+    if (lang === 'python') {
+      // Lazy-load Pyodide only when the user first selects Python
+      preloadPyodideRuntime().catch(() => {});
+    }
   };
 
-  const handleRunTests = () => {
+  const handleRunTests = async () => {
     setIsRunningTests(true);
     setTestResults(null);
-    setTimeout(() => {
+
+    const suites: Record<string, Array<{ label: string; args: any[]; expected: any }>> = {
+      'two-sum': [
+        { label: '[2, 7, 11, 15], target=9', args: [[2, 7, 11, 15], 9], expected: [0, 1] },
+        { label: '[3, 2, 4], target=6', args: [[3, 2, 4], 6], expected: [1, 2] },
+        { label: '[3, 3], target=6', args: [[3, 3], 6], expected: [0, 1] },
+      ],
+      'valid-palindrome': [
+        { label: '"A man, a plan, a canal: Panama"', args: ['A man, a plan, a canal: Panama'], expected: true },
+        { label: '"race a car"', args: ['race a car'], expected: false },
+        { label: '"yuvamitraa"', args: ['yuvamitraa'], expected: false },
+      ],
+      'binary-search': [
+        { label: 'nums=[-1,0,3,5,9,12], target=9', args: [[-1, 0, 3, 5, 9, 12], 9], expected: 4 },
+        { label: 'nums=[-1,0,3,5,9,12], target=2', args: [[-1, 0, 3, 5, 9, 12], 2], expected: -1 },
+        { label: 'nums=[5], target=5', args: [[5], 5], expected: 0 },
+      ],
+      'valid-parentheses': [
+        { label: '"()[]{}"', args: ['()[]{}'], expected: true },
+        { label: '"(]"', args: ['(]'], expected: false },
+        { label: '"([{}])"', args: ['([{}])'], expected: true },
+      ],
+      'fibonacci-dp': [
+        { label: 'n=6', args: [6], expected: 8 },
+        { label: 'n=10', args: [10], expected: 55 },
+        { label: 'n=0', args: [0], expected: 0 },
+      ],
+    };
+
+    if (selectedLang === 'python') {
+      const pyFnNames: Record<string, string> = {
+        'two-sum': 'two_sum',
+        'valid-palindrome': 'is_palindrome',
+        'binary-search': 'binary_search',
+        'valid-parentheses': 'is_valid_parentheses',
+        'fibonacci-dp': 'fib',
+      };
+      const fnName = pyFnNames[activeProblem.id];
+      const cases = suites[activeProblem.id] || [];
+
+      try {
+        const result = await runPythonTestsInWorker({
+          code: codeEditorContent,
+          fnName,
+          testCases: cases,
+          timeoutMs: 5000,
+        });
+
+        const caseLines = (result.results || []).map((tc) => {
+          if (tc.passed) {
+            return {
+              passed: true,
+              text: `✅ Test ${tc.index} passed (Input: ${tc.label} → ${tc.actual})`,
+            };
+          }
+          if (tc.error) {
+            return {
+              passed: false,
+              text: `❌ Test ${tc.index} failed (${tc.label}): ${tc.error}`,
+              traceback: tc.traceback,
+            };
+          }
+          const hintSuffix = tc.typeHint ? ` (${tc.typeHint})` : '';
+          return {
+            passed: false,
+            text: `❌ Test ${tc.index} failed: expected ${tc.expected}, got ${tc.actual}${hintSuffix} (Input: ${tc.label})`,
+          };
+        });
+
+        const elapsedLabel =
+          typeof result.elapsedMs === 'number'
+            ? `Execution time: ${result.elapsedMs.toFixed(2)} ms (${caseLines.length} Python test case${caseLines.length === 1 ? '' : 's'} evaluated)`
+            : undefined;
+
+        const errorBanner = result.errorMessage
+          ? `✗ ${result.errorType || 'Error'}: ${result.errorMessage}`
+          : undefined;
+
+        setTestResults({
+          pass: Boolean(result.ok),
+          log: [
+            errorBanner,
+            ...caseLines.map((c) => c.text),
+            result.traceback,
+            elapsedLabel,
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          stdout: result.stdout?.trim() || undefined,
+          stderr: result.stderr?.trim() || undefined,
+          errorBanner,
+          traceback: result.traceback?.trim() || undefined,
+          caseLines: caseLines.length > 0 ? caseLines : undefined,
+          footer: elapsedLabel,
+        });
+      } catch (err: any) {
+        const msg = `✗ Python Execution Error:\n${err?.message || String(err)}`;
+        setTestResults({
+          pass: false,
+          log: msg,
+          errorBanner: msg,
+        });
+      } finally {
+        setIsRunningTests(false);
+      }
+      return;
+    }
+
+    if (selectedLang !== 'javascript') {
       setIsRunningTests(false);
       setTestResults({
-        pass: true,
-        log: `✓ Test Case 1: PASSED (Input: ${activeProblem.testCases[0].input} -> Output: ${activeProblem.testCases[0].expected})\n✓ Test Case 2: PASSED (Input: ${activeProblem.testCases[1].input} -> Output: ${activeProblem.testCases[1].expected})\n✓ Test Case 3: PASSED (Input: ${activeProblem.testCases[2].input} -> Output: ${activeProblem.testCases[2].expected})\n\nSpeed: 3ms (beats 94.2% of submissions) | Memory: 14.2 MB (O(n) linear space)`
+        pass: false,
+        log: `In-browser automated test execution is supported for Python 3 and JavaScript. Java 21 compilation requires a server-side JVM sandbox.\nSwitch the language selector to "Python 3" or "JavaScript" to run and verify real unit test assertions.`,
       });
-    }, 750);
+      return;
+    }
+
+    try {
+      const fnNames: Record<string, string> = {
+        'two-sum': 'twoSum',
+        'valid-palindrome': 'isPalindrome',
+        'binary-search': 'binarySearch',
+        'valid-parentheses': 'isValid',
+        'fibonacci-dp': 'fib'
+      };
+      const fnName = fnNames[activeProblem.id];
+      const wrapped = new Function(
+        'console',
+        `${codeEditorContent}\nif (typeof ${fnName} !== 'function') { throw new Error('Expected function ${fnName} to be defined'); }\nreturn ${fnName};`
+      );
+      const userFn = wrapped({ log: () => {} });
+
+      const start = performance.now();
+      const cases = suites[activeProblem.id] || [];
+      let allPassed = true;
+      const lines: string[] = [];
+
+      cases.forEach((tc, idx) => {
+        const actual = userFn(...tc.args);
+        const passed = JSON.stringify(actual) === JSON.stringify(tc.expected);
+        if (!passed) allPassed = false;
+        lines.push(
+          `${passed ? '✓' : '✗'} Test Case ${idx + 1}: ${passed ? 'PASSED' : 'FAILED'} (Input: ${tc.label} | Expected: ${JSON.stringify(tc.expected)} | Got: ${JSON.stringify(actual)})`
+        );
+      });
+
+      const elapsedMs = (performance.now() - start).toFixed(2);
+      lines.push(`\nExecution time: ${elapsedMs} ms (${cases.length} real assertions executed)`);
+
+      setTestResults({ pass: allPassed, log: lines.join('\n') });
+    } catch (err: any) {
+      setTestResults({
+        pass: false,
+        log: `✗ Runtime / Syntax Error:\n${err?.message || String(err)}`
+      });
+    } finally {
+      setIsRunningTests(false);
+    }
   };
 
   const handleSubmitSolution = () => {
+    if (!testResults?.pass) return;
     if (!solvedProblemIds.includes(activeProblem.id)) {
       const nextSolved = [...solvedProblemIds, activeProblem.id];
       setSolvedProblemIds(nextSolved);
       localStorage.setItem('ym_solved_problems', JSON.stringify(nextSolved));
       if (updateUser) {
         updateUser({
-          xpPoints: (user?.xpPoints || 1250) + 100,
+          xpPoints: (user?.xpPoints ?? 0) + 100,
         });
       }
     }
@@ -553,7 +739,7 @@ export const CourseCatalog: React.FC = () => {
 
         <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 pr-2">
           <Trophy className="w-4 h-4 text-amber-500" />
-          <span>Your XP: <strong className="text-slate-900">{user?.xpPoints || 1250} XP</strong></span>
+          <span>Your XP: <strong className="text-slate-900">{user?.xpPoints ?? 0} XP</strong></span>
         </div>
       </div>
 
@@ -741,7 +927,10 @@ export const CourseCatalog: React.FC = () => {
                     className="w-full h-72 bg-transparent text-emerald-300 font-mono text-xs leading-relaxed outline-hidden resize-none selection:bg-orange-500/30 selection:text-white"
                   />
                   <button
-                    onClick={() => setCodeEditorContent(activeProblem.starterCode[selectedLang])}
+                    onClick={() => {
+                      setCodeEditorContent(activeProblem.starterCode[selectedLang]);
+                      setTestResults(null);
+                    }}
                     title="Reset to starter solution"
                     className="absolute top-4 right-4 p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex items-center gap-1"
                   >
@@ -753,22 +942,47 @@ export const CourseCatalog: React.FC = () => {
                 {/* Execution Controls & Test Output */}
                 <div className="bg-slate-950 p-4 border-t border-slate-800 space-y-3">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <button
-                      onClick={handleRunTests}
-                      disabled={isRunningTests}
-                      className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      <Play className={`w-3.5 h-3.5 fill-current ${isRunningTests ? 'animate-spin' : ''}`} />
-                      <span>{isRunningTests ? 'Evaluating...' : 'Run Test Cases'}</span>
-                    </button>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button
+                        onClick={handleRunTests}
+                        disabled={isRunningTests}
+                        className="px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Play className={`w-3.5 h-3.5 fill-current ${isRunningTests ? 'animate-spin' : ''}`} />
+                        <span>
+                          {isRunningTests
+                            ? selectedLang === 'python' && pyodideStatus === 'loading'
+                              ? 'Loading Python runtime...'
+                              : 'Evaluating...'
+                            : 'Run Test Cases'}
+                        </span>
+                      </button>
+
+                      {selectedLang === 'python' && pyodideStatus === 'loading' && (
+                        <div className="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-400 bg-amber-950/50 border border-amber-800/60 px-2.5 py-1.5 rounded-lg">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Loading Python runtime...</span>
+                        </div>
+                      )}
+
+                      {selectedLang === 'python' && pyodideStatus === 'ready' && !isRunningTests && (
+                        <div className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-400 bg-emerald-950/40 border border-emerald-800/50 px-2.5 py-1 rounded-lg">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          <span>Python runtime ready</span>
+                        </div>
+                      )}
+                    </div>
 
                     <button
                       onClick={handleSubmitSolution}
-                      disabled={rewardClaimed}
-                      className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md ${
+                      disabled={rewardClaimed || !testResults?.pass}
+                      title={!testResults?.pass ? 'Pass all test cases before claiming XP' : undefined}
+                      className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all shadow-md ${
                         rewardClaimed
                           ? 'bg-emerald-600 text-white cursor-default'
-                          : 'bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white hover:scale-[1.02] shadow-orange-500/25'
+                          : !testResults?.pass
+                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                          : 'bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white hover:scale-[1.02] shadow-orange-500/25 cursor-pointer'
                       }`}
                     >
                       <Trophy className="w-3.5 h-3.5" />
@@ -778,9 +992,62 @@ export const CourseCatalog: React.FC = () => {
 
                   {/* Output Terminal Box */}
                   {testResults && (
-                    <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl font-mono text-xs text-slate-300 space-y-1">
+                    <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl font-mono text-xs text-slate-300 space-y-2.5">
                       <div className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Execution Console:</div>
-                      <pre className="text-emerald-400 whitespace-pre-wrap">{testResults.log}</pre>
+
+                      {testResults.caseLines || testResults.errorBanner || testResults.stdout || testResults.traceback ? (
+                        <div className="space-y-2">
+                          {testResults.errorBanner && (
+                            <pre className="text-rose-400 whitespace-pre-wrap font-semibold">{testResults.errorBanner}</pre>
+                          )}
+
+                          {testResults.caseLines && testResults.caseLines.length > 0 && (
+                            <div className="space-y-1">
+                              {testResults.caseLines.map((line, i) => (
+                                <div key={i} className="space-y-1">
+                                  <div className={line.passed ? 'text-emerald-400' : 'text-rose-400'}>
+                                    {line.text}
+                                  </div>
+                                  {line.traceback && (
+                                    <pre className="text-rose-400/90 text-[11px] whitespace-pre-wrap pl-4 border-l border-rose-800">
+                                      {line.traceback}
+                                    </pre>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {testResults.traceback && (
+                            <div className="space-y-1">
+                              <div className="text-[10px] text-rose-400/80 uppercase tracking-wider font-bold">Traceback:</div>
+                              <pre className="text-rose-400 text-[11px] whitespace-pre-wrap bg-rose-950/30 p-2 rounded-lg border border-rose-900/50">
+                                {testResults.traceback}
+                              </pre>
+                            </div>
+                          )}
+
+                          {testResults.stderr && (
+                            <div className="space-y-1">
+                              <div className="text-[10px] text-rose-400/80 uppercase tracking-wider font-bold">Stderr:</div>
+                              <pre className="text-rose-400 text-[11px] whitespace-pre-wrap">{testResults.stderr}</pre>
+                            </div>
+                          )}
+
+                          {testResults.stdout && (
+                            <div className="space-y-1 pt-1 border-t border-slate-800/80">
+                              <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Stdout:</div>
+                              <pre className="text-sky-300 text-[11px] whitespace-pre-wrap">{testResults.stdout}</pre>
+                            </div>
+                          )}
+
+                          {testResults.footer && (
+                            <div className="text-[11px] text-slate-400 pt-1">{testResults.footer}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <pre className={`${testResults.pass ? 'text-emerald-400' : 'text-rose-400'} whitespace-pre-wrap`}>{testResults.log}</pre>
+                      )}
                     </div>
                   )}
 

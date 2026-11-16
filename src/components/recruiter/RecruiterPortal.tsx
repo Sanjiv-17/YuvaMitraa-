@@ -41,40 +41,69 @@ export const RecruiterPortal: React.FC = () => {
 
   // Form states for posting a new job
   const [title, setTitle] = useState('');
-  const [company, setCompany] = useState(user.companyName || 'BharatTech Innovations Pvt Ltd');
-  const [location, setLocation] = useState(user.location || 'Noida Sector 62 / Hybrid');
-  const [city, setCity] = useState('Noida');
+  const [company, setCompany] = useState(user.companyName || '');
+  const [location, setLocation] = useState(user.location || '');
+  const [city, setCity] = useState(user.location ? user.location.split(',')[0].trim() : '');
   const [type, setType] = useState<Job['type']>('internship');
   const [category, setCategory] = useState<Job['category']>('Tech');
-  const [stipend, setStipend] = useState('₹25,000 / month');
-  const [stipendAmount, setStipendAmount] = useState(25000);
+  const [stipend, setStipend] = useState('₹20,000 / month');
+  const [stipendAmount, setStipendAmount] = useState(20000);
   const [duration, setDuration] = useState('6 Months');
   const [skillsInput, setSkillsInput] = useState('React, JavaScript, Git, REST APIs');
   const [eligibility, setEligibility] = useState('Enrolled undergraduate student (BE/B.Tech/BCA) or recent graduate');
-  const [description, setDescription] = useState('Looking for enthusiastic interns to collaborate on high-impact digital products for youth across India.');
+  const [description, setDescription] = useState('');
   const [postSuccess, setPostSuccess] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Interview Schedule Form
   const [interviewForm, setInterviewForm] = useState({
     date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
     time: '11:00 AM IST',
     mode: 'Online (Google Meet/Zoom)' as 'Online (Google Meet/Zoom)' | 'In-Person / Campus',
-    linkOrVenue: 'https://meet.google.com/yuv-amit-raa',
-    feedbackOrInstructions: 'Please prepare to discuss your React projects and be ready for a short 15-minute live coding session.'
+    linkOrVenue: '',
+    feedbackOrInstructions: 'Please prepare to discuss your projects and problem-solving approach.'
   });
 
-  const cinNumber = user.cinOrRegistrationNumber || 'U72900DL2022PTC394821';
+  const cinNumber = user.cinOrRegistrationNumber || 'Pending Verification';
 
   const handleCreateJob = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !company.trim()) return;
+    setActionError(null);
 
-    if (editingJobId) {
-      updateJob(editingJobId, {
+    try {
+      if (editingJobId) {
+        await updateJob(editingJobId, {
+          title: title.trim(),
+          company: company.trim(),
+          location: location.trim() || 'India',
+          city: city.trim() || (location ? location.split(',')[0].trim() : 'India'),
+          type,
+          category,
+          stipend,
+          stipendAmount,
+          duration,
+          requiredSkills: skillsInput.split(',').map(s => s.trim()).filter(Boolean),
+          eligibility: eligibility.trim(),
+          description: description.trim(),
+        });
+        setPostSuccess(true);
+        setTimeout(() => {
+          setPostSuccess(false);
+          setEditingJobId(null);
+          setActiveSubTab('manage-jobs');
+          setTitle('');
+        }, 1200);
+        return;
+      }
+
+      await addJob({
         title: title.trim(),
         company: company.trim(),
-        location: location.trim(),
-        city: city.trim(),
+        companyLogo: 'https://images.unsplash.com/photo-1542744173-8e7e53415bb0?auto=format&fit=crop&w=120&q=80',
+        location: location.trim() || 'India',
+        city: city.trim() || (location ? location.split(',')[0].trim() : 'India'),
+        coordinates: user.coordinates || { lat: 28.6280, lng: 77.3649 },
         type,
         category,
         stipend,
@@ -83,53 +112,30 @@ export const RecruiterPortal: React.FC = () => {
         requiredSkills: skillsInput.split(',').map(s => s.trim()).filter(Boolean),
         eligibility: eligibility.trim(),
         description: description.trim(),
+        responsibilities: [
+          'Collaborate with product and engineering teams on sprint goals',
+          'Write clean, modular code with complete test coverage',
+          'Participate in daily standups and peer code reviews'
+        ],
+        perks: ['Pre-placement Offer (PPO)', 'Direct Mentorship', 'Certificate of Completion'],
+        deadline: '2026-12-31',
+        isVerified: true,
+        verificationStatus: 'approved',
+        verificationEvidence: `CIN Verified Employer (${cinNumber})`,
+        opportunitySource: 'Direct Employer',
+        creatorId: user.id,
+        creatorRole: 'recruiter'
       });
+
       setPostSuccess(true);
       setTimeout(() => {
         setPostSuccess(false);
-        setEditingJobId(null);
         setActiveSubTab('manage-jobs');
         setTitle('');
       }, 1200);
-      return;
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to save job listing.');
     }
-
-    await addJob({
-      title: title.trim(),
-      company: company.trim(),
-      companyLogo: 'https://images.unsplash.com/photo-1542744173-8e7e53415bb0?auto=format&fit=crop&w=120&q=80',
-      location: location.trim(),
-      city: city.trim(),
-      coordinates: { lat: 28.6280, lng: 77.3649 },
-      type,
-      category,
-      stipend,
-      stipendAmount,
-      duration,
-      requiredSkills: skillsInput.split(',').map(s => s.trim()).filter(Boolean),
-      eligibility: eligibility.trim(),
-      description: description.trim(),
-      responsibilities: [
-        'Collaborate with product and engineering teams on sprint goals',
-        'Write clean, modular code with complete test coverage',
-        'Participate in daily standups and peer code reviews'
-      ],
-      perks: ['Pre-placement Offer (PPO)', 'Direct Mentorship', 'Certificate of Completion'],
-      deadline: '2026-12-31',
-      isVerified: true,
-      verificationStatus: 'approved',
-      verificationEvidence: `CIN Verified Employer (${cinNumber})`,
-      opportunitySource: 'Direct Employer',
-      creatorId: user.id,
-      creatorRole: 'recruiter'
-    });
-
-    setPostSuccess(true);
-    setTimeout(() => {
-      setPostSuccess(false);
-      setActiveSubTab('manage-jobs');
-      setTitle('');
-    }, 1200);
   };
 
   const handleEditJobClick = (job: Job) => {
@@ -149,19 +155,32 @@ export const RecruiterPortal: React.FC = () => {
     setActiveSubTab('post-job');
   };
 
-  const handleScheduleInterviewSubmit = (e: React.FormEvent) => {
+  const handleScheduleInterviewSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!schedulingInterviewApp) return;
+    setActionError(null);
 
-    updateApplicationStatus(schedulingInterviewApp.id, 'Interview', {
-      interviewDate: interviewForm.date,
-      interviewTime: interviewForm.time,
-      interviewMode: interviewForm.mode,
-      interviewLinkOrVenue: interviewForm.linkOrVenue,
-      recruiterFeedback: interviewForm.feedbackOrInstructions
-    });
+    try {
+      await updateApplicationStatus(schedulingInterviewApp.id, 'Interview', {
+        interviewDate: interviewForm.date,
+        interviewTime: interviewForm.time,
+        interviewMode: interviewForm.mode,
+        interviewLinkOrVenue: interviewForm.linkOrVenue,
+        recruiterFeedback: interviewForm.feedbackOrInstructions
+      });
+      setSchedulingInterviewApp(null);
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to schedule candidate interview.');
+    }
+  };
 
-    setSchedulingInterviewApp(null);
+  const handleStatusChange = async (appId: string, nextStatus: Application['status']) => {
+    setActionError(null);
+    try {
+      await updateApplicationStatus(appId, nextStatus);
+    } catch (err: any) {
+      setActionError(err?.message || 'Failed to update application status.');
+    }
   };
 
   // Filter applications
@@ -187,7 +206,7 @@ export const RecruiterPortal: React.FC = () => {
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2 mb-1">
-                <h1 className="text-2xl lg:text-3xl font-black tracking-tight">{user.companyName || 'BharatTech Innovations'}</h1>
+                <h1 className="text-2xl lg:text-3xl font-black tracking-tight">{user.companyName || `${user.name}'s Recruiter Desk`}</h1>
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 border border-emerald-400/40 text-emerald-300">
                   <ShieldCheck className="w-3.5 h-3.5" /> CIN Verified Employer
                 </span>
@@ -246,6 +265,13 @@ export const RecruiterPortal: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {actionError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{actionError}</span>
+        </div>
+      )}
 
       {/* Subtab 1: Post / Edit Opening */}
       {activeSubTab === 'post-job' ? (
@@ -571,7 +597,7 @@ export const RecruiterPortal: React.FC = () => {
                     {/* Quick Status Toggles & Interview Scheduler Button */}
                     <div className="flex items-center gap-1.5 self-start sm:self-auto flex-wrap">
                       <button
-                        onClick={() => updateApplicationStatus(app.id, 'Shortlisted')}
+                        onClick={() => handleStatusChange(app.id, 'Shortlisted')}
                         className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all cursor-pointer ${
                           app.status === 'Shortlisted'
                             ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
@@ -594,7 +620,7 @@ export const RecruiterPortal: React.FC = () => {
                       </button>
 
                       <button
-                        onClick={() => updateApplicationStatus(app.id, 'Selected')}
+                        onClick={() => handleStatusChange(app.id, 'Selected')}
                         className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all cursor-pointer ${
                           app.status === 'Selected'
                             ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
@@ -605,7 +631,7 @@ export const RecruiterPortal: React.FC = () => {
                       </button>
 
                       <button
-                        onClick={() => updateApplicationStatus(app.id, 'Rejected')}
+                        onClick={() => handleStatusChange(app.id, 'Rejected')}
                         className={`px-2.5 py-1 text-[11px] font-bold rounded-lg border transition-all cursor-pointer ${
                           app.status === 'Rejected'
                             ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
@@ -805,16 +831,13 @@ export const RecruiterPortal: React.FC = () => {
 
             <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 font-mono text-xs whitespace-pre-wrap text-slate-800 dark:text-slate-200 leading-relaxed max-h-96 overflow-y-auto">
               {selectedApplicantResume.candidateResumeText || `CANDIDATE DOSSIER: ${selectedApplicantResume.candidateName}
-Email: ${selectedApplicantResume.candidateEmail}
-Phone: ${selectedApplicantResume.candidatePhone || '+91 98765 43210'}
-Verified Skills: ${selectedApplicantResume.candidateSkills?.join(', ') || 'React, TypeScript, CSS, Node.js'}
-College: ${selectedApplicantResume.candidateCollege || 'National Institute of Technology Delhi'}
-Branch: ${selectedApplicantResume.candidateBranch || 'Computer Science & Engineering'}
+Email: ${selectedApplicantResume.candidateEmail || 'Not provided'}
+Phone: ${selectedApplicantResume.candidatePhone || 'Not provided'}
+Skills: ${selectedApplicantResume.candidateSkills?.length ? selectedApplicantResume.candidateSkills.join(', ') : 'None listed'}
+College: ${selectedApplicantResume.candidateCollege || 'Not specified'}
+Branch: ${selectedApplicantResume.candidateBranch || 'Not specified'}
 
-ACADEMIC EXCELLENCE & HANDS-ON PROJECTS:
-• Full-Stack Youth Inclusion Portal: Built responsive web applications using React, Tailwind CSS, and RESTful APIs.
-• AI Mentorship Portal: Designed candidate matching algorithms and automated skill assessment modules.
-• Open Source Contributor: Active GitHub contributor with clean git hygiene and peer code reviews.`}
+No resume text uploaded by candidate.`}
             </div>
 
             <div className="flex justify-end gap-2 pt-2">
@@ -847,9 +870,15 @@ ACADEMIC EXCELLENCE & HANDS-ON PROJECTS:
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteJob(jobToDelete.id);
+                onClick={async () => {
+                  const target = jobToDelete;
                   setJobToDelete(null);
+                  setActionError(null);
+                  try {
+                    await deleteJob(target.id);
+                  } catch (err: any) {
+                    setActionError(err?.message || 'Failed to delete listing.');
+                  }
                 }}
                 className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white rounded-xl shadow-xs cursor-pointer"
               >

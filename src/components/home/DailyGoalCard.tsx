@@ -30,7 +30,7 @@ const DEFAULT_GOAL: DailyGoal = {
   title: 'React Hooks & State Management',
   category: 'Frontend Development',
   targetMinutes: 60,
-  completedMinutes: 45,
+  completedMinutes: 0,
   lastUpdatedDate: new Date().toISOString().split('T')[0],
   isCompleted: false,
 };
@@ -100,10 +100,10 @@ export const DailyGoalCard: React.FC = () => {
       });
       // Award XP
       const currentBadges = user?.badges || [];
-      const currentStreak = user?.streakDays ?? 5;
+      const currentStreak = user?.streakDays ?? 0;
       updateUser({
-        xpPoints: (user?.xpPoints ?? 1250) + 35,
-        streakDays: currentStreak < 6 ? currentStreak + 1 : currentStreak,
+        xpPoints: (user?.xpPoints ?? 0) + 35,
+        streakDays: currentStreak + 1,
         badges: currentBadges.includes('Daily Achiever') ? currentBadges : [...currentBadges, 'Daily Achiever']
       });
     }
@@ -388,7 +388,7 @@ export const DailyGoalCard: React.FC = () => {
       <div className="mt-2 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
         <span className="flex items-center gap-1">
           <Flame className="w-3.5 h-3.5 text-[#FF7A00]" />
-          <span>Keep your <strong className="text-slate-800">{user?.streakDays ?? 5}-day streak</strong> active with daily practice.</span>
+          <span>Keep your <strong className="text-slate-800">{user?.streakDays ?? 0}-day streak</strong> active with daily practice.</span>
         </span>
         <button
           onClick={() => setActiveTab('roadmap')}

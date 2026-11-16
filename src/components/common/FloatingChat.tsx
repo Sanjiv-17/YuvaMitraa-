@@ -149,12 +149,12 @@ export const FloatingChat: React.FC<{ isOpen: boolean; onClose: () => void }> = 
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setMessages(prev => [...prev, assistantMsg]);
-    } catch (err) {
+    } catch (err: any) {
       setMessages(prev => [
         ...prev,
         {
           sender: 'assistant',
-          text: 'I am here to help you skill up and get hired! Try asking about React internships, SSC CGL preparation, or resume optimization.',
+          text: err?.message || 'Unable to reach the AI Mentor service right now. Please verify your connection and try again.',
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);

@@ -14,7 +14,8 @@ import {
   Square,
   PlusCircle,
   Check,
-  DollarSign
+  DollarSign,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { generateCareerRoadmap } from '../../services/api';
@@ -34,12 +35,13 @@ export const CareerRoadmap: React.FC = () => {
   const [careerGoal, setCareerGoal] = useState(presets[0]);
   const [currentLevel, setCurrentLevel] = useState('Beginner');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [roadmapError, setRoadmapError] = useState<string | null>(null);
   const [completedPhases, setCompletedPhases] = useState<number[]>(() => {
     try {
       const saved = localStorage.getItem('ym_roadmap_completed');
-      return saved ? JSON.parse(saved) : [1];
+      return saved ? JSON.parse(saved) : [];
     } catch {
-      return [1];
+      return [];
     }
   });
 
@@ -74,7 +76,7 @@ export const CareerRoadmap: React.FC = () => {
         // Award XP
         const currentBadges = user?.badges || [];
         updateUser({
-          xpPoints: (user?.xpPoints ?? 1250) + 100,
+          xpPoints: (user?.xpPoints ?? 0) + 100,
           badges: currentBadges.includes('Roadmap Pioneer') ? currentBadges : [...currentBadges, 'Roadmap Pioneer']
         });
         return [...prev, phaseNumber];
@@ -91,11 +93,12 @@ export const CareerRoadmap: React.FC = () => {
   const handleGenerate = async (customGoal?: string) => {
     const goal = customGoal || careerGoal;
     setIsGenerating(true);
+    setRoadmapError(null);
     try {
       const data = await generateCareerRoadmap(goal, currentLevel);
       setRoadmap(data);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setRoadmapError(err?.message || 'Failed to generate AI career roadmap. Please try again.');
     } finally {
       setIsGenerating(false);
     }
@@ -181,6 +184,23 @@ export const CareerRoadmap: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Banner */}
+      {roadmapError && (
+        <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{roadmapError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleGenerate()}
+            className="px-3 py-1 rounded-lg bg-red-600 text-white font-bold text-[11px] hover:bg-red-700 cursor-pointer shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Generated Roadmap Display */}
       {roadmap ? (
         <div className="space-y-6 animate-in fade-in">
@@ -190,7 +210,7 @@ export const CareerRoadmap: React.FC = () => {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="inline-flex items-center gap-1.5 bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full text-xs font-semibold">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Tailored by Gemini 4 Hydrogen</span>
+                <span>Tailored by Gemini AI</span>
               </div>
 
               {/* Progress Pill */}

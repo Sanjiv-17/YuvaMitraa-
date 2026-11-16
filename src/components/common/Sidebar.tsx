@@ -46,7 +46,7 @@ export const Sidebar: React.FC = () => {
     navItems.push({ id: 'admin', label: 'Admin Dashboard', icon: Landmark, badge: 'Staff' });
   }
 
-  if (isRecruiter) {
+  if (isRecruiter && homeTarget !== 'recruiter') {
     navItems.push({ id: 'recruiter', label: 'Recruiter Dashboard', icon: Building2 });
   }
 

@@ -33,24 +33,72 @@ service cloud.firestore {
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['recruiter', 'college'];
     }
 
+    function isValidStringOpt(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    function isValidStringListOpt(data, key, maxItems) {
+      return !(key in data) || (
+        data[key] is list &&
+        data[key].size() <= maxItems &&
+        (data[key].size() == 0 || data[key][0] is string)
+      );
+    }
+
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'role', 'email', 'createdAt']) &&
         data.keys().hasOnly([
-          'uid', 'name', 'email', 'phone', 'role', 'college', 'department', 'branch',
-          'rollNumber', 'cgpa', 'graduationYear', 'collegeAisheCode', 'cinOrRegistrationNumber',
-          'currentRole', 'yearsOfExperience', 'location', 'age', 'createdAt', 'updatedAt'
+          'uid', 'name', 'email', 'phone', 'role', 'college', 'institution', 'education',
+          'course', 'studyYear', 'department', 'branch', 'rollNumber', 'cgpa', 'graduationYear',
+          'collegeAisheCode', 'collegeWebsite', 'accreditation', 'companyName', 'designation',
+          'industry', 'companyWebsite', 'cinOrRegistrationNumber', 'currentRole', 'yearsOfExperience',
+          'location', 'age', 'skills', 'interests', 'preferredRoles', 'githubUrl', 'linkedinUrl',
+          'portfolioUrl', 'resumeFileName', 'resumeUpdatedAt', 'photoUrl', 'streakDays', 'xpPoints', 'badges',
+          'savedJobIds', 'enrolledCourses', 'createdAt', 'updatedAt'
         ]) &&
         data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
         (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() <= 100)) &&
         data.email is string && data.email.size() > 0 && data.email.size() <= 160 &&
         data.role in ['student', 'recruiter', 'experienced', 'college', 'admin'] &&
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
-        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
-        (!('phone' in data) || (data.phone is string && data.phone.size() <= 32)) &&
-        (!('college' in data) || (data.college is string && data.college.size() <= 200)) &&
-        (!('currentRole' in data) || (data.currentRole is string && data.currentRole.size() <= 160)) &&
-        (!('yearsOfExperience' in data) || (data.yearsOfExperience is string && data.yearsOfExperience.size() <= 64)) &&
-        (!('location' in data) || (data.location is string && data.location.size() <= 160));
+        isValidStringOpt(data, 'updatedAt', 64) &&
+        isValidStringOpt(data, 'phone', 32) &&
+        isValidStringOpt(data, 'college', 200) &&
+        isValidStringOpt(data, 'institution', 200) &&
+        isValidStringOpt(data, 'education', 200) &&
+        isValidStringOpt(data, 'course', 160) &&
+        isValidStringOpt(data, 'studyYear', 64) &&
+        isValidStringOpt(data, 'department', 160) &&
+        isValidStringOpt(data, 'branch', 160) &&
+        isValidStringOpt(data, 'rollNumber', 80) &&
+        isValidStringOpt(data, 'collegeAisheCode', 80) &&
+        isValidStringOpt(data, 'collegeWebsite', 300) &&
+        isValidStringOpt(data, 'accreditation', 120) &&
+        isValidStringOpt(data, 'companyName', 200) &&
+        isValidStringOpt(data, 'designation', 160) &&
+        isValidStringOpt(data, 'industry', 120) &&
+        isValidStringOpt(data, 'companyWebsite', 300) &&
+        isValidStringOpt(data, 'cinOrRegistrationNumber', 80) &&
+        isValidStringOpt(data, 'currentRole', 160) &&
+        isValidStringOpt(data, 'yearsOfExperience', 64) &&
+        isValidStringOpt(data, 'location', 160) &&
+        isValidStringOpt(data, 'githubUrl', 300) &&
+        isValidStringOpt(data, 'linkedinUrl', 300) &&
+        isValidStringOpt(data, 'portfolioUrl', 300) &&
+        isValidStringOpt(data, 'resumeFileName', 200) &&
+        isValidStringOpt(data, 'resumeUpdatedAt', 64) &&
+        isValidStringOpt(data, 'photoUrl', 1000) &&
+        (!('cgpa' in data) || (data.cgpa is string && data.cgpa.size() <= 20) || (data.cgpa is number && data.cgpa >= 0 && data.cgpa <= 100)) &&
+        (!('graduationYear' in data) || (data.graduationYear is string && data.graduationYear.size() <= 16) || (data.graduationYear is number && data.graduationYear >= 1950 && data.graduationYear <= 2100)) &&
+        (!('age' in data) || (data.age is number && data.age >= 13 && data.age <= 120)) &&
+        (!('streakDays' in data) || (data.streakDays is number && data.streakDays >= 0 && data.streakDays <= 10000)) &&
+        (!('xpPoints' in data) || (data.xpPoints is number && data.xpPoints >= 0 && data.xpPoints <= 10000000)) &&
+        isValidStringListOpt(data, 'skills', 60) &&
+        isValidStringListOpt(data, 'interests', 40) &&
+        isValidStringListOpt(data, 'preferredRoles', 30) &&
+        isValidStringListOpt(data, 'badges', 50) &&
+        isValidStringListOpt(data, 'savedJobIds', 200) &&
+        (!('enrolledCourses' in data) || (data.enrolledCourses is list && data.enrolledCourses.size() <= 100));
     }
 
     function isValidJob(data) {
@@ -80,6 +128,14 @@ service cloud.firestore {
         data.appliedDate is string && data.appliedDate.size() > 0 && data.appliedDate.size() <= 64;
     }
 
+    function isValidSavedResume(data) {
+      return data.keys().hasAll(['fileName', 'text', 'updatedAt']) &&
+        data.keys().hasOnly(['fileName', 'text', 'updatedAt']) &&
+        data.fileName is string && data.fileName.size() > 0 && data.fileName.size() <= 200 &&
+        data.text is string && data.text.size() > 0 && data.text.size() <= 150000 &&
+        data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64;
+    }
+
     // User profiles - private PII isolation; users cannot select admin on signup or edit their own role field
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
@@ -101,7 +157,17 @@ service cloud.firestore {
             !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'uid', 'createdAt'])
           )
         );
-      allow delete: if isOwner(userId) || isAdmin();
+      allow delete: if isValidId(userId) && (isOwner(userId) || isAdmin());
+
+      // Single extracted resume document at users/{uid}/resume/current
+      match /resume/{resumeDocId} {
+        allow get: if (isOwner(userId) || isAdmin()) && resumeDocId == 'current';
+        allow list: if false;
+        allow create, update: if isOwner(userId) &&
+          resumeDocId == 'current' &&
+          isValidSavedResume(request.resource.data);
+        allow delete: if (isOwner(userId) || isAdmin()) && resumeDocId == 'current';
+      }
     }
 
     // Admin registry and admin-only data - strictly requires verified Firebase custom claim (admin: true)
@@ -120,7 +186,7 @@ service cloud.firestore {
         (isAdmin() || isEmployerOrCollege()) &&
         isValidJob(request.resource.data) &&
         request.resource.data.id == jobId;
-      allow delete: if isAdmin() || isEmployerOrCollege();
+      allow delete: if isValidId(jobId) && (isAdmin() || isEmployerOrCollege());
     }
 
     // Genuine Internships collection - read for signed-in users, write restricted to admin & recruiters/colleges
@@ -130,7 +196,7 @@ service cloud.firestore {
         (isAdmin() || isEmployerOrCollege()) &&
         isValidInternship(request.resource.data) &&
         request.resource.data.id == internshipId;
-      allow delete: if isAdmin() || isEmployerOrCollege();
+      allow delete: if isValidId(internshipId) && (isAdmin() || isEmployerOrCollege());
     }
 
     // Job applications - candidate can read/create their own, admin can manage

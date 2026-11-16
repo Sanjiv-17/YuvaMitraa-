@@ -22,6 +22,7 @@ import {
   getDoc, 
   setDoc, 
   updateDoc, 
+  deleteDoc,
   getDocFromServer 
 } from 'firebase/firestore';
 import defaultFirebaseConfig from '../../firebase-applet-config.json';
@@ -142,13 +143,11 @@ export async function registerWithEmailPassword(
   const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
   
   if (credential.user && name.trim()) {
-    try {
-      await updateProfile(credential.user, {
-        displayName: name.trim()
-      });
-    } catch (profileErr) {
+    updateProfile(credential.user, {
+      displayName: name.trim()
+    }).catch((profileErr) => {
       console.warn('Could not update Firebase display name immediately:', profileErr);
-    }
+    });
   }
 
   return credential;
@@ -165,7 +164,7 @@ export async function sendFirebasePasswordResetEmail(email: string): Promise<voi
 /**
  * Direct Google OAuth fallback when Firebase Google provider isn't enabled in console
  */
-export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserResult } | null> {
+export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserResult; oauthAccessToken: string } | null> {
   return new Promise((resolve, reject) => {
     const clientId = firebaseConfig.apiKey ? (defaultFirebaseConfig as any).oAuthClientId : '';
     if (!clientId) {
@@ -204,6 +203,7 @@ export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserRes
             }
             const info = await res.json();
             resolve({
+              oauthAccessToken: tokenResponse.access_token,
               user: {
                 uid: `google-${info.sub}`,
                 email: info.email || '',
@@ -243,7 +243,7 @@ export async function signInWithGoogleOAuth(): Promise<{ user: GoogleAuthUserRes
 /**
  * 4. Google Authentication: Popup with Redirect Fallback + OAuth Fallback
  */
-export async function signInWithGoogle(): Promise<UserCredential | { user: GoogleAuthUserResult } | null> {
+export async function signInWithGoogle(): Promise<UserCredential | { user: GoogleAuthUserResult; oauthAccessToken: string } | null> {
   try {
     const result = await signInWithPopup(auth, googleProvider);
     return result;
@@ -337,6 +337,29 @@ export async function getFirebaseCustomClaims(forceRefresh: boolean = false): Pr
   return tokenResult.claims || {};
 }
 
+let preferRestFirestore = false;
+const FIRESTORE_SDK_TIMEOUT_MS = 4000;
+const FIRESTORE_REST_TIMEOUT_MS = 12000;
+
+async function withSdkTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  promise.catch(() => {});
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          const err: any = new Error(`${label} timed out (client is offline)`);
+          err.code = 'unavailable';
+          reject(err);
+        }, FIRESTORE_SDK_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function isFirestoreServiceDisabledError(err: any): boolean {
   const code = String(err?.code || '').toLowerCase();
   const msg = String(err?.message || '').toLowerCase();
@@ -349,27 +372,94 @@ function isFirestoreServiceDisabledError(err: any): boolean {
 }
 
 function isOfflineOrUnavailableError(err: any): boolean {
+  const name = String(err?.name || '').toLowerCase();
   const code = String(err?.code || '').toLowerCase();
   const msg = String(err?.message || '').toLowerCase();
   return (
+    name === 'timeouterror' ||
+    name === 'aborterror' ||
     code === 'unavailable' ||
     code === 'failed-precondition' ||
+    code === 'deadline-exceeded' ||
+    code === 'aborted' ||
     msg.includes('client is offline') ||
     msg.includes('offline') ||
     msg.includes('network') ||
-    msg.includes('unavailable')
+    msg.includes('unavailable') ||
+    msg.includes('signal timed out') ||
+    msg.includes('timed out') ||
+    msg.includes('timeout') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('load failed') ||
+    msg.includes('aborted')
   );
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number = FIRESTORE_REST_TIMEOUT_MS,
+  retries: number = 1
+): Promise<Response> {
+  let lastError: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    try {
+      return await fetch(url, {
+        ...init,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+    } catch (err: any) {
+      lastError = err;
+      if (attempt < retries && isOfflineOrUnavailableError(err)) {
+        continue;
+      }
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  throw lastError;
+}
+
+function toFirestoreValue(v: any): any {
+  if (v === undefined || v === null) return null;
+  if (typeof v === 'string') return { stringValue: v };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  }
+  if (Array.isArray(v)) {
+    return { arrayValue: { values: v.map(toFirestoreValue).filter(Boolean) } };
+  }
+  if (typeof v === 'object') {
+    return { mapValue: { fields: toFirestoreFields(v) } };
+  }
+  return null;
+}
+
+function fromFirestoreValue(v: any): any {
+  if (!v || typeof v !== 'object') return undefined;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('booleanValue' in v) return Boolean(v.booleanValue);
+  if ('arrayValue' in v) {
+    const arr = Array.isArray(v.arrayValue?.values) ? v.arrayValue.values : [];
+    return arr.map(fromFirestoreValue).filter((item: any) => item !== undefined);
+  }
+  if ('mapValue' in v) {
+    return fromFirestoreFields(v.mapValue?.fields);
+  }
+  return undefined;
 }
 
 function toFirestoreFields(obj: Record<string, any>): Record<string, any> {
   const fields: Record<string, any> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v === undefined || v === null) continue;
-    if (typeof v === 'string') fields[k] = { stringValue: v };
-    else if (typeof v === 'boolean') fields[k] = { booleanValue: v };
-    else if (typeof v === 'number') {
-      fields[k] = Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
-    }
+    const converted = toFirestoreValue(v);
+    if (converted) fields[k] = converted;
   }
   return fields;
 }
@@ -378,11 +468,8 @@ function fromFirestoreFields(fields: Record<string, any> | undefined): Record<st
   const parsed: Record<string, any> = {};
   if (!fields) return parsed;
   for (const [k, v] of Object.entries<any>(fields)) {
-    if (!v || typeof v !== 'object') continue;
-    if ('stringValue' in v) parsed[k] = v.stringValue;
-    else if ('integerValue' in v) parsed[k] = Number(v.integerValue);
-    else if ('doubleValue' in v) parsed[k] = Number(v.doubleValue);
-    else if ('booleanValue' in v) parsed[k] = Boolean(v.booleanValue);
+    const converted = fromFirestoreValue(v);
+    if (converted !== undefined) parsed[k] = converted;
   }
   return parsed;
 }
@@ -391,7 +478,7 @@ async function getUserDocViaRest(uid: string): Promise<{ exists: boolean; data: 
   if (!auth.currentUser) throw new Error('Not signed in');
   const idToken = await auth.currentUser.getIdToken();
   const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}`;
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${idToken}` },
   });
@@ -413,7 +500,7 @@ async function writeUserDocViaRest(uid: string, payload: Record<string, any>, up
   const params = updateKeys && updateKeys.length > 0
     ? '?' + updateKeys.map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&')
     : '';
-  const res = await fetch(`${baseUrl}${params}`, {
+  const res = await fetchWithTimeout(`${baseUrl}${params}`, {
     method: 'PATCH',
     headers: {
       Authorization: `Bearer ${idToken}`,
@@ -445,6 +532,69 @@ export async function syncUserProfileToFirestore(
   const userRef = doc(db, 'users', uid);
   const now = new Date().toISOString();
 
+  const appendExtendedFields = (target: Record<string, any>, source: Record<string, any>) => {
+    const stringFields: Array<[string, number]> = [
+      ['phone', 32],
+      ['college', 200],
+      ['institution', 200],
+      ['education', 200],
+      ['course', 160],
+      ['studyYear', 64],
+      ['department', 160],
+      ['branch', 160],
+      ['rollNumber', 80],
+      ['cgpa', 20],
+      ['graduationYear', 16],
+      ['collegeAisheCode', 80],
+      ['collegeWebsite', 300],
+      ['accreditation', 120],
+      ['companyName', 200],
+      ['designation', 160],
+      ['industry', 120],
+      ['companyWebsite', 300],
+      ['cinOrRegistrationNumber', 80],
+      ['currentRole', 160],
+      ['yearsOfExperience', 64],
+      ['location', 160],
+      ['githubUrl', 300],
+      ['linkedinUrl', 300],
+      ['portfolioUrl', 300],
+      ['resumeFileName', 200],
+      ['resumeUpdatedAt', 64],
+      ['photoUrl', 1000],
+    ];
+    for (const [key, maxLen] of stringFields) {
+      if (source[key] !== undefined && source[key] !== null) {
+        const strVal = String(source[key]).slice(0, maxLen);
+        if (strVal || key in target === false) target[key] = strVal;
+      }
+    }
+    if (typeof source.age === 'number' && source.age >= 13 && source.age <= 120) {
+      target.age = source.age;
+    }
+    if (typeof source.streakDays === 'number' && source.streakDays >= 0) {
+      target.streakDays = Math.min(10000, Math.round(source.streakDays));
+    }
+    if (typeof source.xpPoints === 'number' && source.xpPoints >= 0) {
+      target.xpPoints = Math.min(10000000, Math.round(source.xpPoints));
+    }
+    const arrayFields: Array<[string, number]> = [
+      ['skills', 60],
+      ['interests', 40],
+      ['preferredRoles', 30],
+      ['badges', 50],
+      ['savedJobIds', 200],
+    ];
+    for (const [key, maxItems] of arrayFields) {
+      if (Array.isArray(source[key])) {
+        target[key] = source[key].map((item: any) => String(item).slice(0, 120)).filter(Boolean).slice(0, maxItems);
+      }
+    }
+    if (Array.isArray(source.enrolledCourses)) {
+      target.enrolledCourses = source.enrolledCourses.slice(0, 100);
+    }
+  };
+
   const buildCreatePayload = () => {
     const requestedRole = profile.role;
     const safeRole =
@@ -460,11 +610,7 @@ export async function syncUserProfileToFirestore(
       createdAt: profile.createdAt || now,
       updatedAt: now,
     };
-    if (profile.phone) createPayload.phone = String(profile.phone).slice(0, 32);
-    if (profile.college) createPayload.college = String(profile.college).slice(0, 200);
-    if (profile.location) createPayload.location = String(profile.location).slice(0, 160);
-    if (profile.currentRole) createPayload.currentRole = String(profile.currentRole).slice(0, 160);
-    if (profile.yearsOfExperience) createPayload.yearsOfExperience = String(profile.yearsOfExperience).slice(0, 64);
+    appendExtendedFields(createPayload, profile);
     return createPayload;
   };
 
@@ -472,10 +618,15 @@ export async function syncUserProfileToFirestore(
     // Fast path for newly created accounts: skip getDoc and create directly
     if (options?.isNewUser) {
       const createPayload = buildCreatePayload();
+      if (preferRestFirestore) {
+        await writeUserDocViaRest(uid, createPayload);
+        return createPayload;
+      }
       try {
-        await setDoc(userRef, createPayload);
+        await withSdkTimeout(setDoc(userRef, createPayload), 'Firestore setDoc');
       } catch (sdkWriteErr: any) {
         if (isOfflineOrUnavailableError(sdkWriteErr)) {
+          preferRestFirestore = true;
           await writeUserDocViaRest(uid, createPayload);
         } else {
           throw sdkWriteErr;
@@ -486,17 +637,24 @@ export async function syncUserProfileToFirestore(
 
     let docExists = false;
     let existingData: any = null;
-    try {
-      const existing = await getDoc(userRef);
-      docExists = existing.exists();
-      existingData = docExists ? existing.data() : null;
-    } catch (sdkReadErr: any) {
-      if (isOfflineOrUnavailableError(sdkReadErr)) {
-        const restDoc = await getUserDocViaRest(uid);
-        docExists = restDoc.exists;
-        existingData = restDoc.data;
-      } else {
-        throw sdkReadErr;
+    if (preferRestFirestore) {
+      const restDoc = await getUserDocViaRest(uid);
+      docExists = restDoc.exists;
+      existingData = restDoc.data;
+    } else {
+      try {
+        const existing = await withSdkTimeout(getDoc(userRef), 'Firestore getDoc');
+        docExists = existing.exists();
+        existingData = docExists ? existing.data() : null;
+      } catch (sdkReadErr: any) {
+        if (isOfflineOrUnavailableError(sdkReadErr)) {
+          preferRestFirestore = true;
+          const restDoc = await getUserDocViaRest(uid);
+          docExists = restDoc.exists;
+          existingData = restDoc.data;
+        } else {
+          throw sdkReadErr;
+        }
       }
     }
 
@@ -505,32 +663,38 @@ export async function syncUserProfileToFirestore(
         updatedAt: now,
       };
       if (profile.name) updatePayload.name = String(profile.name).slice(0, 100);
-      if (profile.email) updatePayload.email = String(profile.email).slice(0, 160);
-      if (profile.phone !== undefined) updatePayload.phone = String(profile.phone || '').slice(0, 32);
-      if (profile.college !== undefined) updatePayload.college = String(profile.college || '').slice(0, 200);
-      if (profile.location !== undefined) updatePayload.location = String(profile.location || '').slice(0, 160);
-      if (profile.currentRole !== undefined) updatePayload.currentRole = String(profile.currentRole || '').slice(0, 160);
-      if (profile.yearsOfExperience !== undefined) updatePayload.yearsOfExperience = String(profile.yearsOfExperience || '').slice(0, 64);
+      if (profile.email) updatePayload.email = String(profile.email).toLowerCase().slice(0, 160);
+      appendExtendedFields(updatePayload, profile);
 
-      try {
-        await updateDoc(userRef, updatePayload);
-      } catch (sdkUpdateErr: any) {
-        if (isOfflineOrUnavailableError(sdkUpdateErr)) {
-          await writeUserDocViaRest(uid, updatePayload, Object.keys(updatePayload));
-        } else {
-          throw sdkUpdateErr;
+      if (preferRestFirestore) {
+        await writeUserDocViaRest(uid, updatePayload, Object.keys(updatePayload));
+      } else {
+        try {
+          await withSdkTimeout(updateDoc(userRef, updatePayload), 'Firestore updateDoc');
+        } catch (sdkUpdateErr: any) {
+          if (isOfflineOrUnavailableError(sdkUpdateErr)) {
+            preferRestFirestore = true;
+            await writeUserDocViaRest(uid, updatePayload, Object.keys(updatePayload));
+          } else {
+            throw sdkUpdateErr;
+          }
         }
       }
       return { ...(existingData || {}), ...updatePayload };
     } else {
       const createPayload = buildCreatePayload();
-      try {
-        await setDoc(userRef, createPayload);
-      } catch (sdkWriteErr: any) {
-        if (isOfflineOrUnavailableError(sdkWriteErr)) {
-          await writeUserDocViaRest(uid, createPayload);
-        } else {
-          throw sdkWriteErr;
+      if (preferRestFirestore) {
+        await writeUserDocViaRest(uid, createPayload);
+      } else {
+        try {
+          await withSdkTimeout(setDoc(userRef, createPayload), 'Firestore setDoc');
+        } catch (sdkWriteErr: any) {
+          if (isOfflineOrUnavailableError(sdkWriteErr)) {
+            preferRestFirestore = true;
+            await writeUserDocViaRest(uid, createPayload);
+          } else {
+            throw sdkWriteErr;
+          }
         }
       }
       return createPayload;
@@ -552,14 +716,19 @@ export async function getUserProfileFromFirestore(uid: string): Promise<any | nu
 
   const userRef = doc(db, 'users', uid);
   try {
+    if (preferRestFirestore) {
+      const restDoc = await getUserDocViaRest(uid);
+      return restDoc.exists ? restDoc.data : null;
+    }
     try {
-      const snap = await getDoc(userRef);
+      const snap = await withSdkTimeout(getDoc(userRef), 'Firestore getDoc');
       if (snap.exists()) {
         return snap.data();
       }
       return null;
     } catch (sdkReadErr: any) {
       if (isOfflineOrUnavailableError(sdkReadErr)) {
+        preferRestFirestore = true;
         const restDoc = await getUserDocViaRest(uid);
         return restDoc.exists ? restDoc.data : null;
       }
@@ -572,6 +741,203 @@ export async function getUserProfileFromFirestore(uid: string): Promise<any | nu
     }
     handleFirestoreError(err, OperationType.GET, `users/${uid}`);
     return null;
+  }
+}
+
+export interface SavedResumeDoc {
+  fileName: string;
+  text: string;
+  updatedAt: string;
+}
+
+function resumeRestUrl(uid: string): string {
+  return `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}/resume/current`;
+}
+
+async function getResumeDocViaRest(uid: string): Promise<SavedResumeDoc | null> {
+  if (!auth.currentUser) throw new Error('Not signed in');
+  const idToken = await auth.currentUser.getIdToken();
+  const res = await fetchWithTimeout(resumeRestUrl(uid), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody?.error?.message || `Firestore REST GET resume failed (${res.status})`);
+  }
+  const json = await res.json();
+  const data = fromFirestoreFields(json.fields);
+  if (!data?.text && !data?.fileName) return null;
+  return {
+    fileName: String(data.fileName || ''),
+    text: String(data.text || ''),
+    updatedAt: String(data.updatedAt || ''),
+  };
+}
+
+async function writeResumeDocViaRest(uid: string, payload: SavedResumeDoc): Promise<void> {
+  if (!auth.currentUser) throw new Error('Not signed in');
+  const idToken = await auth.currentUser.getIdToken();
+  const res = await fetchWithTimeout(resumeRestUrl(uid), {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ fields: toFirestoreFields(payload) }),
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody?.error?.message || `Firestore REST PATCH resume failed (${res.status})`);
+  }
+}
+
+async function deleteResumeDocViaRest(uid: string): Promise<void> {
+  if (!auth.currentUser) throw new Error('Not signed in');
+  const idToken = await auth.currentUser.getIdToken();
+  const res = await fetchWithTimeout(resumeRestUrl(uid), {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${idToken}` },
+  });
+  if (res.status === 404) return;
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody?.error?.message || `Firestore REST DELETE resume failed (${res.status})`);
+  }
+}
+
+/**
+ * Save extracted resume text, filename, and timestamp to Firestore at users/{uid}/resume/current
+ * (overwrites the single document on every re-upload; never stores the raw file binary).
+ */
+export async function saveExtractedResumeToFirestore(
+  uid: string,
+  payload: { fileName: string; text: string; updatedAt?: string }
+): Promise<SavedResumeDoc> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    throw new Error('Sign in to save your resume.');
+  }
+
+  const docData: SavedResumeDoc = {
+    fileName: String(payload.fileName || 'resume.pdf').trim().slice(0, 200) || 'resume.pdf',
+    text: String(payload.text || '').trim().slice(0, 150000),
+    updatedAt: String(payload.updatedAt || new Date().toISOString()).slice(0, 64),
+  };
+
+  if (!docData.text) {
+    throw new Error('Cannot save an empty resume.');
+  }
+
+  const resumeRef = doc(db, 'users', uid, 'resume', 'current');
+  const path = `users/${uid}/resume/current`;
+
+  try {
+    if (preferRestFirestore) {
+      await writeResumeDocViaRest(uid, docData);
+      return docData;
+    }
+
+    try {
+      await withSdkTimeout(setDoc(resumeRef, docData), 'Firestore setDoc resume');
+      return docData;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await writeResumeDocViaRest(uid, docData);
+        return docData;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err)) {
+      console.warn('Firestore resume save timed out or client offline:', err?.message || err);
+      throw new Error('Network timed out while saving your resume. Please check your connection and try again.');
+    }
+    handleFirestoreError(err, OperationType.WRITE, path);
+    const msg = String(err?.message || '');
+    if (msg.toLowerCase().includes('permission') || err?.code === 'permission-denied') {
+      throw new Error('Firestore permission denied while saving your resume. Please verify your sign-in session.');
+    }
+    throw new Error(msg || 'Failed to save extracted resume to Firestore.');
+  }
+}
+
+/**
+ * Read saved resume document from Firestore at users/{uid}/resume/current.
+ */
+export async function getSavedResumeFromFirestore(uid: string): Promise<SavedResumeDoc | null> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    return null;
+  }
+
+  const resumeRef = doc(db, 'users', uid, 'resume', 'current');
+  const path = `users/${uid}/resume/current`;
+
+  try {
+    if (preferRestFirestore) {
+      return await getResumeDocViaRest(uid);
+    }
+    try {
+      const snap = await withSdkTimeout(getDoc(resumeRef), 'Firestore getDoc resume');
+      if (!snap.exists()) return null;
+      const data = snap.data() as Partial<SavedResumeDoc> | undefined;
+      if (!data?.text && !data?.fileName) return null;
+      return {
+        fileName: String(data.fileName || ''),
+        text: String(data.text || ''),
+        updatedAt: String(data.updatedAt || ''),
+      };
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        return await getResumeDocViaRest(uid);
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      console.warn('Firestore saved resume read skipped:', err?.message || err);
+      return null;
+    }
+    handleFirestoreError(err, OperationType.GET, path);
+    return null;
+  }
+}
+
+/**
+ * Delete saved resume document from Firestore at users/{uid}/resume/current.
+ */
+export async function deleteSavedResumeFromFirestore(uid: string): Promise<void> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    throw new Error('Sign in to delete your saved resume.');
+  }
+
+  const resumeRef = doc(db, 'users', uid, 'resume', 'current');
+  const path = `users/${uid}/resume/current`;
+
+  try {
+    if (preferRestFirestore) {
+      await deleteResumeDocViaRest(uid);
+      return;
+    }
+    try {
+      await withSdkTimeout(deleteDoc(resumeRef), 'Firestore deleteDoc resume');
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await deleteResumeDocViaRest(uid);
+        return;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err)) {
+      console.warn('Firestore resume delete timed out or client offline:', err?.message || err);
+      throw new Error('Network timed out while deleting your saved resume. Please check your connection and try again.');
+    }
+    handleFirestoreError(err, OperationType.DELETE, path);
+    throw new Error(err?.message || 'Failed to delete saved resume from Firestore.');
   }
 }
 

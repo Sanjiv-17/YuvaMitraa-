@@ -67,18 +67,18 @@ export const HomeDashboard: React.FC = () => {
             </h1>
             
             <p className="text-xs sm:text-sm text-orange-100 max-w-xl font-medium">
-              You are on a <span className="text-white font-bold">{user?.streakDays ?? 1}-day streak</span>! Complete 1 quiz today to level up your employability score and unlock verified recruiter visibility.
+              You are on a <span className="text-white font-bold">{user?.streakDays ?? 0}-day streak</span>! Complete 1 quiz today to level up your employability score and unlock verified recruiter visibility.
             </p>
 
             <div className="flex flex-wrap items-center gap-2 pt-2">
               <span className="text-xs bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full font-medium">
-                ⭐ {user?.xpPoints ?? 500} XP Earned
+                ⭐ {user?.xpPoints ?? 0} XP Earned
               </span>
               <span className="text-xs bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full font-medium">
-                🎖️ {(user?.badges || [])[(user?.badges || []).length - 1] || 'Scholar'}
+                🎖️ {(user?.badges || [])[(user?.badges || []).length - 1] || 'New Member'}
               </span>
               <span className="text-xs bg-black/20 backdrop-blur-xs px-3 py-1 rounded-full font-medium">
-                📍 {(user?.location || 'New Delhi').split(',')[0]}
+                📍 {(user?.location || 'India').split(',')[0]}
               </span>
             </div>
           </div>
@@ -167,7 +167,7 @@ export const HomeDashboard: React.FC = () => {
               <BookOpen className="w-4 h-4" />
             </div>
           </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">{(user?.enrolledCourses || []).length || 1}</div>
+          <div className="text-2xl font-bold text-slate-900 mt-2">{(user?.enrolledCourses || []).length}</div>
           <div className="text-[11px] text-[#0284C7] font-medium flex items-center gap-1 mt-1">
             <span>Free interactive lessons</span>
           </div>
@@ -189,21 +189,40 @@ export const HomeDashboard: React.FC = () => {
           </div>
         </div>
 
-        <div 
-          onClick={() => setActiveTab('profile')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs hover:border-[#FF7A00]/50 transition-all cursor-pointer group"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500">Profile Readiness</span>
-            <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
-              <TrendingUp className="w-4 h-4" />
+        {(() => {
+          let readiness = 0;
+          if (user?.name) readiness += 15;
+          if (user?.email) readiness += 15;
+          if (user?.phone) readiness += 10;
+          if (user?.education || user?.institution || user?.college) readiness += 20;
+          if ((user?.skills || []).length > 0) readiness += 20;
+          if (user?.resumeText && user.resumeText.length > 20) readiness += 10;
+          if ((user?.projects || []).length > 0) readiness += 10;
+          const readinessHint = !user?.skills?.length
+            ? 'Add skills in Profile'
+            : !user?.resumeText
+            ? 'Upload resume (+10%)'
+            : !(user?.projects || []).length
+            ? 'Add projects (+10%)'
+            : 'Recruiter Ready';
+          return (
+            <div 
+              onClick={() => setActiveTab('profile')}
+              className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs hover:border-[#FF7A00]/50 transition-all cursor-pointer group"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500">Profile Readiness</span>
+                <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <TrendingUp className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-slate-900 mt-2">{readiness}%</div>
+              <div className="text-[11px] text-purple-600 font-medium flex items-center gap-1 mt-1">
+                <span>{readinessHint}</span>
+              </div>
             </div>
-          </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">88%</div>
-          <div className="text-[11px] text-purple-600 font-medium flex items-center gap-1 mt-1">
-            <span>Upload fresh projects (+12%)</span>
-          </div>
-        </div>
+          );
+        })()}
 
       </div>
 
@@ -294,7 +313,7 @@ export const HomeDashboard: React.FC = () => {
               <h2 className="text-base font-bold text-slate-900">
                 Top Internship & Job Openings
               </h2>
-              <p className="text-xs text-slate-500">Sorted by proximity to {(user?.location || 'New Delhi').split(',')[0]}</p>
+              <p className="text-xs text-slate-500">Sorted by proximity to {(user?.location || 'India').split(',')[0]}</p>
             </div>
             <button
               onClick={() => setActiveTab('jobs')}

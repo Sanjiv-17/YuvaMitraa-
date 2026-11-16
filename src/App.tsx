@@ -1,59 +1,69 @@
-import React, { useState, useEffect } from 'react';
-import { Bot, Smartphone, Monitor, ShieldAlert, X } from 'lucide-react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { Bot, Smartphone, Monitor, ShieldAlert, X, Loader2 } from 'lucide-react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/common/Navbar';
 import { Sidebar } from './components/common/Sidebar';
 import { BottomNav } from './components/common/BottomNav';
-import { HomeDashboard } from './components/home/HomeDashboard';
-import { ExperiencedDashboard } from './components/experienced/ExperiencedDashboard';
-import { LearnSection } from './components/learn/LearnSection';
-import { OpportunitiesSection } from './components/opportunities/OpportunitiesSection';
-import { AIAssistantSection } from './components/assistant/AIAssistantSection';
-import { ProfilePage } from './components/profile/ProfilePage';
-import { AdminDashboard } from './components/admin/AdminDashboard';
-import { RecruiterPortal } from './components/recruiter/RecruiterPortal';
-import { CollegePortal } from './components/college/CollegePortal';
 import { JobDetailModal } from './components/jobs/JobDetailModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { LoginScreen } from './components/auth/LoginScreen';
-import { AdminLoginScreen } from './components/auth/AdminLoginScreen';
+
+const HomeDashboard = lazy(() => import('./components/home/HomeDashboard').then((m) => ({ default: m.HomeDashboard })));
+const ExperiencedDashboard = lazy(() => import('./components/experienced/ExperiencedDashboard').then((m) => ({ default: m.ExperiencedDashboard })));
+const LearnSection = lazy(() => import('./components/learn/LearnSection').then((m) => ({ default: m.LearnSection })));
+const OpportunitiesSection = lazy(() => import('./components/opportunities/OpportunitiesSection').then((m) => ({ default: m.OpportunitiesSection })));
+const AIAssistantSection = lazy(() => import('./components/assistant/AIAssistantSection').then((m) => ({ default: m.AIAssistantSection })));
+const ProfilePage = lazy(() => import('./components/profile/ProfilePage').then((m) => ({ default: m.ProfilePage })));
+const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard').then((m) => ({ default: m.AdminDashboard })));
+const RecruiterPortal = lazy(() => import('./components/recruiter/RecruiterPortal').then((m) => ({ default: m.RecruiterPortal })));
+const CollegePortal = lazy(() => import('./components/college/CollegePortal').then((m) => ({ default: m.CollegePortal })));
+const AdminLoginScreen = lazy(() => import('./components/auth/AdminLoginScreen').then((m) => ({ default: m.AdminLoginScreen })));
+
+const RouteFallback: React.FC = () => (
+  <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-500">
+    <Loader2 className="w-7 h-7 animate-spin text-[#FF7A00]" />
+    <span className="text-xs font-medium">Loading YuvaMitraa module...</span>
+  </div>
+);
 
 const MainScreenContent: React.FC = () => {
   const { activeTab, isAdmin, user } = useApp();
 
-  if (activeTab === 'experienced' || (activeTab === 'home' && user.role === 'experienced')) {
-    return <ExperiencedDashboard />;
-  }
-  if (activeTab === 'home') {
+  const renderSection = () => {
+    if (activeTab === 'experienced' || (activeTab === 'home' && user.role === 'experienced')) {
+      return <ExperiencedDashboard />;
+    }
+    if (activeTab === 'home') {
+      return <HomeDashboard />;
+    }
+    if (activeTab === 'learn' || activeTab === 'courses' || activeTab === 'course-player' || activeTab === 'certificates') {
+      const sub = activeTab === 'certificates' ? 'certificates' : (activeTab === 'course-player' ? 'player' : 'catalog');
+      return <LearnSection key="learn" initialSubTab={sub} />;
+    }
+    if (activeTab === 'opportunities' || activeTab === 'jobs' || activeTab === 'schemes' || activeTab === 'applications') {
+      const sub = activeTab === 'schemes' ? 'schemes' : (activeTab === 'applications' ? 'applications' : 'jobs');
+      return <OpportunitiesSection key="opp" initialSubTab={sub} />;
+    }
+    if (activeTab === 'ai-assistant' || activeTab === 'assistant' || activeTab === 'resume' || activeTab === 'interview' || activeTab === 'roadmap' || activeTab === 'guidance' || activeTab === 'learning') {
+      const sub = activeTab === 'resume' ? 'resume' : (activeTab === 'interview' ? 'interview' : (activeTab === 'roadmap' ? 'roadmap' : (activeTab === 'guidance' ? 'guidance' : (activeTab === 'learning' ? 'learning' : 'chat'))));
+      return <AIAssistantSection key="ai" initialSubTab={sub} />;
+    }
+    if (activeTab === 'profile') {
+      return <ProfilePage />;
+    }
+    if (activeTab === 'admin') {
+      return isAdmin ? <AdminDashboard /> : (user.role === 'experienced' ? <ExperiencedDashboard /> : <HomeDashboard />);
+    }
+    if (activeTab === 'recruiter') {
+      return <RecruiterPortal />;
+    }
+    if (activeTab === 'college') {
+      return <CollegePortal />;
+    }
     return <HomeDashboard />;
-  }
-  if (activeTab === 'learn' || activeTab === 'courses' || activeTab === 'course-player' || activeTab === 'certificates') {
-    const sub = activeTab === 'certificates' ? 'certificates' : (activeTab === 'course-player' ? 'player' : 'catalog');
-    return <LearnSection key={`learn-${sub}`} initialSubTab={sub} />;
-  }
-  if (activeTab === 'opportunities' || activeTab === 'jobs' || activeTab === 'schemes' || activeTab === 'applications') {
-    const sub = activeTab === 'schemes' ? 'schemes' : (activeTab === 'applications' ? 'applications' : 'jobs');
-    return <OpportunitiesSection key={`opp-${sub}`} initialSubTab={sub} />;
-  }
-  if (activeTab === 'ai-assistant' || activeTab === 'assistant' || activeTab === 'resume' || activeTab === 'interview' || activeTab === 'roadmap' || activeTab === 'guidance' || activeTab === 'learning') {
-    const sub = activeTab === 'resume' ? 'resume' : (activeTab === 'interview' ? 'interview' : (activeTab === 'roadmap' ? 'roadmap' : (activeTab === 'guidance' ? 'guidance' : (activeTab === 'learning' ? 'learning' : 'chat'))));
-    return <AIAssistantSection key={`ai-${sub}`} initialSubTab={sub} />;
-  }
-  if (activeTab === 'profile') {
-    return <ProfilePage />;
-  }
-  if (activeTab === 'admin') {
-    // Enforce server-verified admin claim check before rendering AdminDashboard
-    return isAdmin ? <AdminDashboard /> : (user.role === 'experienced' ? <ExperiencedDashboard /> : <HomeDashboard />);
-  }
-  if (activeTab === 'recruiter') {
-    return <RecruiterPortal />;
-  }
-  if (activeTab === 'college') {
-    return <CollegePortal />;
-  }
+  };
 
-  return <HomeDashboard />;
+  return <Suspense fallback={<RouteFallback />}>{renderSection()}</Suspense>;
 };
 
 const AppContent: React.FC = () => {
@@ -71,6 +81,18 @@ const AppContent: React.FC = () => {
     window.addEventListener('popstate', syncPath);
     return () => window.removeEventListener('popstate', syncPath);
   }, []);
+
+  // Preload core navigation chunks in background once signed in for zero-spinner tab switching
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const timer = setTimeout(() => {
+      import('./components/opportunities/OpportunitiesSection').catch(() => {});
+      import('./components/learn/LearnSection').catch(() => {});
+      import('./components/assistant/AIAssistantSection').catch(() => {});
+      import('./components/profile/ProfilePage').catch(() => {});
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [isAuthenticated]);
 
   const isHiddenAdminLogin = pathname === '/admin-login';
   const isAdminWildcardRoute = pathname.startsWith('/admin') && pathname !== '/admin-login';
@@ -92,7 +114,11 @@ const AppContent: React.FC = () => {
         setPathname('/admin');
       }
     } else {
-      return <AdminLoginScreen />;
+      return (
+        <Suspense fallback={<RouteFallback />}>
+          <AdminLoginScreen />
+        </Suspense>
+      );
     }
   }
 

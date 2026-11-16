@@ -34,6 +34,22 @@
           "type": "string",
           "description": "Years of professional work experience"
         },
+        "course": {
+          "type": "string",
+          "description": "Course or degree program"
+        },
+        "studyYear": {
+          "type": "string",
+          "description": "Current academic year or semester"
+        },
+        "education": {
+          "type": "string",
+          "description": "Education qualification summary"
+        },
+        "institution": {
+          "type": "string",
+          "description": "Institution name"
+        },
         "college": {
           "type": "string",
           "description": "College or university institution"
@@ -51,16 +67,40 @@
           "description": "Student roll or registration number"
         },
         "cgpa": {
-          "type": "number",
-          "description": "Cumulative GPA score out of 10"
+          "type": "string",
+          "description": "Cumulative GPA score"
         },
         "graduationYear": {
-          "type": "number",
+          "type": "string",
           "description": "Year of graduation"
         },
         "collegeAisheCode": {
           "type": "string",
           "description": "AISHE institutional accreditation code"
+        },
+        "collegeWebsite": {
+          "type": "string",
+          "description": "Official college website URL"
+        },
+        "accreditation": {
+          "type": "string",
+          "description": "Institutional accreditation status"
+        },
+        "companyName": {
+          "type": "string",
+          "description": "Employer company name"
+        },
+        "designation": {
+          "type": "string",
+          "description": "Recruiter or professional designation"
+        },
+        "industry": {
+          "type": "string",
+          "description": "Industry sector"
+        },
+        "companyWebsite": {
+          "type": "string",
+          "description": "Official company website URL"
         },
         "cinOrRegistrationNumber": {
           "type": "string",
@@ -73,6 +113,62 @@
         "age": {
           "type": "number",
           "description": "User age in years"
+        },
+        "skills": {
+          "type": "array",
+          "description": "Candidate skills list"
+        },
+        "interests": {
+          "type": "array",
+          "description": "Career interests list"
+        },
+        "preferredRoles": {
+          "type": "array",
+          "description": "Preferred job roles"
+        },
+        "githubUrl": {
+          "type": "string",
+          "description": "GitHub profile URL"
+        },
+        "linkedinUrl": {
+          "type": "string",
+          "description": "LinkedIn profile URL"
+        },
+        "portfolioUrl": {
+          "type": "string",
+          "description": "Portfolio website URL"
+        },
+        "resumeFileName": {
+          "type": "string",
+          "description": "Uploaded resume file name"
+        },
+        "resumeUpdatedAt": {
+          "type": "string",
+          "description": "ISO timestamp when resume text was extracted and saved"
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Profile avatar URL"
+        },
+        "streakDays": {
+          "type": "number",
+          "description": "Active learning streak days"
+        },
+        "xpPoints": {
+          "type": "number",
+          "description": "Earned learning XP points"
+        },
+        "badges": {
+          "type": "array",
+          "description": "Earned skill badges"
+        },
+        "savedJobIds": {
+          "type": "array",
+          "description": "Bookmarked job IDs"
+        },
+        "enrolledCourses": {
+          "type": "array",
+          "description": "Enrolled courses and completion progress"
         },
         "createdAt": {
           "type": "string",
@@ -170,12 +266,47 @@
         "errorMessage": { "type": "string" }
       },
       "required": ["sourceName", "lastSyncAt", "status", "fetchedCount"]
+    },
+    "SavedResume": {
+      "title": "SavedResume",
+      "description": "Extracted resume text and metadata stored at users/{uid}/resume/current",
+      "type": "object",
+      "properties": {
+        "fileName": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Original PDF resume filename"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 150000,
+          "description": "Plain resume text extracted in-browser via pdf.js"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO timestamp when resume was saved or overwritten"
+        }
+      },
+      "required": ["fileName", "text", "updatedAt"]
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
       "description": "User profile documents indexed by user Firebase UID"
+    },
+    "/users/{userId}/resume/{resumeId}": {
+      "schema": "SavedResume",
+      "description": "Single extracted resume document ('current') per user, overwritten on re-upload"
+    },
+    "/admins/{adminId}": {
+      "schema": "User",
+      "description": "Admin registry records accessible only to claim-verified admins"
+    },
+    "/adminData/{docId}": {
+      "schema": "DataSyncLog",
+      "description": "Protected administrative metadata accessible only to claim-verified admins"
     },
     "/jobs/{jobId}": {
       "schema": "Job",

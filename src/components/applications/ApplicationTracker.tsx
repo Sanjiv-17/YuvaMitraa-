@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Application } from '../../types';
+import { openExternalUrl } from '../../utils/navigation';
 
 const PIPELINE_STEPS: Array<{ key: Application['status']; label: string }> = [
   { key: 'Applied', label: 'Applied' },
@@ -31,7 +32,7 @@ const PIPELINE_STEPS: Array<{ key: Application['status']; label: string }> = [
 export const ApplicationTracker: React.FC = () => {
   const { applications, setActiveTab, updateApplicationStatus } = useApp();
   const [filterStatus, setFilterStatus] = useState<string>('All');
-  const [calendarAlert, setCalendarAlert] = useState<string | null>(null);
+  const [calendarAlert, setCalendarAlert] = useState<{ message: string; googleUrl: string } | null>(null);
 
   const statuses = ['All', 'Applied', 'Shortlisted', 'Interview', 'Selected', 'Rejected'];
 
@@ -46,8 +47,43 @@ export const ApplicationTracker: React.FC = () => {
   };
 
   const handleAddToCalendar = (app: Application) => {
-    setCalendarAlert(`Interview reminder added to Google Calendar for ${app.jobTitle} with ${app.company}!`);
-    setTimeout(() => setCalendarAlert(null), 3500);
+    const baseDate = app.interviewDate ? new Date(`${app.interviewDate}T10:00:00`) : new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    const start = isNaN(baseDate.getTime()) ? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) : baseDate;
+    const end = new Date(start.getTime() + 45 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    const title = `Interview: ${app.jobTitle} at ${app.company}`;
+    const details = app.interviewLinkOrVenue ? `Venue/Link: ${app.interviewLinkOrVenue}` : 'YuvaMitraa Interview Reminder';
+
+    const icsContent = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//YuvaMitraa//ApplicationTracker//EN',
+      'BEGIN:VEVENT',
+      `UID:ym-${app.id}@yuvamitraa.in`,
+      `DTSTAMP:${fmt(new Date())}`,
+      `DTSTART:${fmt(start)}`,
+      `DTEND:${fmt(end)}`,
+      `SUMMARY:${title}`,
+      `DESCRIPTION:${details}`,
+      'END:VEVENT',
+      'END:VCALENDAR'
+    ].join('\r\n');
+
+    const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Interview_${app.company.replace(/\s+/g, '_')}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    const googleUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(title)}&dates=${fmt(start)}/${fmt(end)}&details=${encodeURIComponent(details)}`;
+    setCalendarAlert({
+      message: `Calendar invite (.ics) downloaded for ${app.jobTitle} with ${app.company}.`,
+      googleUrl,
+    });
   };
 
   const getStepProgressIndex = (status: Application['status']) => {
@@ -90,9 +126,28 @@ export const ApplicationTracker: React.FC = () => {
 
       {/* Calendar Alert Banner */}
       {calendarAlert && (
-        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2.5 text-xs text-emerald-800 animate-in fade-in">
-          <BellRing className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span className="font-semibold">{calendarAlert}</span>
+        <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs text-emerald-800 animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <BellRing className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{calendarAlert.message}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => openExternalUrl(calendarAlert.googleUrl)}
+              className="px-3 py-1 rounded-lg bg-emerald-600 text-white font-bold text-[11px] hover:bg-emerald-700 flex items-center gap-1 cursor-pointer"
+            >
+              <span>Open Google Calendar</span>
+              <ExternalLink className="w-3 h-3" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setCalendarAlert(null)}
+              className="text-emerald-700 hover:underline font-semibold text-[11px] cursor-pointer"
+            >
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
 

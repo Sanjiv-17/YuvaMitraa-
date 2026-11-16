@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Briefcase, 
   Landmark, 
@@ -16,6 +16,10 @@ export const OpportunitiesSection: React.FC<{ initialSubTab?: 'jobs' | 'schemes'
 }) => {
   const { applications, savedJobIds } = useApp();
   const [activeSubTab, setActiveSubTab] = useState<'jobs' | 'schemes' | 'applications' | 'saved'>(initialSubTab);
+
+  useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">

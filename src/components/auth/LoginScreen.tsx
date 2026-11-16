@@ -83,14 +83,19 @@ export const LoginScreen: React.FC = () => {
   const [errorInfo, setErrorInfo] = useState<FirebaseErrorInfo | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  const [legalModal, setLegalModal] = useState<'terms' | 'privacy' | null>(null);
+
   // Resolve user role from Firestore & Firebase claims after sign-in, then redirect to matching dashboard
-  const completePostAuthLogin = async (fbUser: {
-    uid: string;
-    email?: string | null;
-    displayName?: string | null;
-    photoURL?: string | null;
-    emailVerified?: boolean;
-  }) => {
+  const completePostAuthLogin = async (
+    fbUser: {
+      uid: string;
+      email?: string | null;
+      displayName?: string | null;
+      photoURL?: string | null;
+      emailVerified?: boolean;
+    },
+    oauthAccessToken?: string
+  ) => {
     const email = (fbUser.email || '').toLowerCase();
     const name = fbUser.displayName || (email ? email.split('@')[0] : 'Yuva Member');
     const photoUrl = fbUser.photoURL || '';
@@ -98,9 +103,20 @@ export const LoginScreen: React.FC = () => {
 
     let idToken: string | undefined;
     let claims: Record<string, any> = {};
+    let firestoreProfile: any = null;
+    let savedResume: { fileName: string; text: string; updatedAt: string } | null = null;
+
     if (isFirebaseAuthUser && auth.currentUser) {
-      idToken = await auth.currentUser.getIdToken(true);
-      claims = await getFirebaseCustomClaims(false);
+      const [tokenVal, claimsVal, profileVal, resumeVal] = await Promise.all([
+        auth.currentUser.getIdToken(false),
+        getFirebaseCustomClaims(false),
+        getUserProfileFromFirestore(fbUser.uid),
+        import('../../services/firebase').then((m) => m.getSavedResumeFromFirestore(fbUser.uid)).catch(() => null),
+      ]);
+      idToken = tokenVal;
+      claims = claimsVal;
+      firestoreProfile = profileVal;
+      savedResume = resumeVal;
     }
 
     // Check if user holds server-issued verified admin custom claim
@@ -110,13 +126,11 @@ export const LoginScreen: React.FC = () => {
       return;
     }
 
-    // Read role from Firestore users/{uid} (gracefully null if Firestore API is disabled or offline)
-    const firestoreProfile = isFirebaseAuthUser ? await getUserProfileFromFirestore(fbUser.uid) : null;
-
     // Pass Firestore role if available; otherwise let server preserve registered role
     const backendRes = await firebaseLoginApi({
       firebaseUid: fbUser.uid,
       idToken,
+      oauthAccessToken,
       email,
       name: firestoreProfile?.name || name,
       role: firestoreProfile?.role,
@@ -136,7 +150,7 @@ export const LoginScreen: React.FC = () => {
     }
 
     if (!firestoreProfile && isFirebaseAuthUser) {
-      // Best-effort sync to Firestore without blocking login if Firestore API is disabled
+      // Best-effort sync to Firestore without blocking login
       syncUserProfileToFirestore(fbUser.uid, {
         name: backendRes.user?.name || name,
         email,
@@ -149,6 +163,9 @@ export const LoginScreen: React.FC = () => {
 
     login(backendRes.token, {
       ...backendRes.user,
+      ...(savedResume?.fileName ? { resumeFileName: savedResume.fileName } : firestoreProfile?.resumeFileName !== undefined ? { resumeFileName: firestoreProfile.resumeFileName } : {}),
+      ...(savedResume?.text ? { resumeText: savedResume.text } : {}),
+      ...(savedResume?.updatedAt ? { resumeUpdatedAt: savedResume.updatedAt } : firestoreProfile?.resumeUpdatedAt !== undefined ? { resumeUpdatedAt: firestoreProfile.resumeUpdatedAt } : {}),
       role: resolvedRole,
       name: firestoreProfile?.name || backendRes.user?.name || name,
       email: firestoreProfile?.email || email,
@@ -178,8 +195,16 @@ export const LoginScreen: React.FC = () => {
       }
     }
 
+    // Preload primary dashboard chunks during idle time so login transition is instant
+    const preloadTimer = setTimeout(() => {
+      import('../home/HomeDashboard').catch(() => {});
+      import('../experienced/ExperiencedDashboard').catch(() => {});
+      import('../recruiter/RecruiterPortal').catch(() => {});
+    }, 350);
+
     return () => {
       isMounted = false;
+      clearTimeout(preloadTimer);
     };
   }, []);
 
@@ -350,26 +375,28 @@ export const LoginScreen: React.FC = () => {
       sendVerificationEmail(fbUser).catch(() => {});
 
       const createdAt = new Date().toISOString();
-      // Save chosen role in Firestore: users/{uid} -> { role, email, createdAt }
-      await syncUserProfileToFirestore(fbUser.uid, {
-        name,
-        email,
-        role: regRole,
-        createdAt,
-        currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
-        yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
-      }, { isNewUser: true });
+      const idToken = await fbUser.getIdToken(false);
 
-      const idToken = await fbUser.getIdToken();
-      const backendRes = await firebaseLoginApi({
-        firebaseUid: fbUser.uid,
-        idToken,
-        email,
-        name,
-        role: regRole,
-        currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
-        yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
-      });
+      // Save chosen role in Firestore & authenticate backend session concurrently
+      const [, backendRes] = await Promise.all([
+        syncUserProfileToFirestore(fbUser.uid, {
+          name,
+          email,
+          role: regRole,
+          createdAt,
+          currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+          yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+        }, { isNewUser: true }),
+        firebaseLoginApi({
+          firebaseUid: fbUser.uid,
+          idToken,
+          email,
+          name,
+          role: regRole,
+          currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+          yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+        }),
+      ]);
 
       login(backendRes.token, {
         ...backendRes.user,
@@ -406,8 +433,8 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
+      void sendPasswordResetLinkApi(email).catch(() => {});
       await sendFirebasePasswordResetEmail(email);
-      await sendPasswordResetLinkApi(email).catch(() => {});
       setSuccessMessage('Reset link sent. Check your inbox and spam folder.');
     } catch (err: any) {
       handleAuthError(err, 'Forgot Password');
@@ -429,7 +456,7 @@ export const LoginScreen: React.FC = () => {
         return;
       }
 
-      await completePostAuthLogin(result.user);
+      await completePostAuthLogin(result.user, result.oauthAccessToken);
     } catch (err: any) {
       handleAuthError(err, 'Google Sign-In');
     } finally {
@@ -987,7 +1014,29 @@ export const LoginScreen: React.FC = () => {
                   className="mt-0.5 w-4 h-4 rounded-sm bg-slate-900 border-slate-700 text-[#FF7A00] focus:ring-[#FF7A00] cursor-pointer"
                 />
                 <span>
-                  I agree to the <span className="text-[#FF7A00] underline">Terms of Service</span> and <span className="text-[#FF7A00] underline">Privacy Policy</span> of YuvaMitraa.
+                  I agree to the{' '}
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      setLegalModal('terms');
+                    }}
+                    className="text-[#FF7A00] underline hover:text-amber-400 cursor-pointer"
+                  >
+                    Terms of Service
+                  </button>{' '}
+                  and{' '}
+                  <button
+                    type="button"
+                    onClick={(ev) => {
+                      ev.preventDefault();
+                      setLegalModal('privacy');
+                    }}
+                    className="text-[#FF7A00] underline hover:text-amber-400 cursor-pointer"
+                  >
+                    Privacy Policy
+                  </button>{' '}
+                  of YuvaMitraa.
                 </span>
               </label>
             </div>
@@ -1083,6 +1132,43 @@ export const LoginScreen: React.FC = () => {
           <span>Protected by Firebase Authentication & 256-bit SSL</span>
         </div>
       </main>
+
+      {legalModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 text-xs text-slate-300 space-y-3 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+              <h3 className="text-sm font-bold text-white">
+                {legalModal === 'terms' ? 'YuvaMitraa Terms of Service' : 'YuvaMitraa Privacy Policy'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setLegalModal(null)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {legalModal === 'terms' ? (
+              <p className="leading-relaxed text-slate-300">
+                YuvaMitraa provides verified internship discovery, skill courses, and AI-assisted career mentoring. Users must provide accurate academic or employer details and never solicit registration fees from applicants.
+              </p>
+            ) : (
+              <p className="leading-relaxed text-slate-300">
+                Your authentication credentials are protected by Firebase Authentication. Personal profile details and resumes are used strictly for job matching and AI career mentoring with PII redaction on mentor requests.
+              </p>
+            )}
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setLegalModal(null)}
+                className="px-4 py-1.5 rounded-xl bg-[#FF7A00] text-white font-bold cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

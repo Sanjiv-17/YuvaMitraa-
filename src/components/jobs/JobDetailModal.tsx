@@ -39,7 +39,9 @@ export const JobDetailModal: React.FC = () => {
 
   const [isCheckingAI, setIsCheckingAI] = useState(false);
   const [eligibilityResult, setEligibilityResult] = useState<EligibilityResult | null>(null);
+  const [eligibilityError, setEligibilityError] = useState<string | null>(null);
   const [isApplying, setIsApplying] = useState(false);
+  const [isSubmittingApply, setIsSubmittingApply] = useState(false);
   const [coverLetter, setCoverLetter] = useState('');
   const [appliedSuccess, setAppliedSuccess] = useState(false);
   const [applyErrorMessage, setApplyErrorMessage] = useState<string | null>(null);
@@ -50,7 +52,9 @@ export const JobDetailModal: React.FC = () => {
         `Hello ${selectedJobForDetail.company || 'Team'}, I am excited to apply for the ${selectedJobForDetail.title} position. With my background in ${user?.education || 'relevant coursework'} and skills in ${(user?.skills || []).slice(0, 3).join(', ') || 'practical technologies'}, I am confident in adding real value to your projects.`
       );
       setEligibilityResult(null);
+      setEligibilityError(null);
       setIsApplying(false);
+      setIsSubmittingApply(false);
       setAppliedSuccess(false);
       setApplyErrorMessage(null);
     }
@@ -64,11 +68,12 @@ export const JobDetailModal: React.FC = () => {
 
   const handleRunEligibility = async () => {
     setIsCheckingAI(true);
+    setEligibilityError(null);
     try {
       const result = await checkEligibility(job, user);
       setEligibilityResult(result);
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setEligibilityError(err?.message || 'Unable to run AI eligibility check right now. Please try again.');
     } finally {
       setIsCheckingAI(false);
     }
@@ -77,15 +82,22 @@ export const JobDetailModal: React.FC = () => {
   const handleApplySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setApplyErrorMessage(null);
-    const success = await applyForJob(job, coverLetter, eligibilityResult?.matchScore || 85);
-    if (success) {
-      setAppliedSuccess(true);
-      setTimeout(() => {
-        setAppliedSuccess(false);
-        setIsApplying(false);
-      }, 1500);
-    } else {
-      setApplyErrorMessage('You have already applied for this position! Track its status under Applications.');
+    setIsSubmittingApply(true);
+    try {
+      const success = await applyForJob(job, coverLetter, eligibilityResult?.matchScore || 85);
+      if (success) {
+        setAppliedSuccess(true);
+        setTimeout(() => {
+          setAppliedSuccess(false);
+          setIsApplying(false);
+        }, 1500);
+      } else {
+        setApplyErrorMessage('You have already applied for this position! Track its status under Applications.');
+      }
+    } catch (err: any) {
+      setApplyErrorMessage(err?.message || 'Failed to submit application. Please ensure you are signed in.');
+    } finally {
+      setIsSubmittingApply(false);
     }
   };
 
@@ -203,6 +215,19 @@ export const JobDetailModal: React.FC = () => {
                 </button>
               )}
             </div>
+
+            {eligibilityError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-between gap-2">
+                <span>{eligibilityError}</span>
+                <button
+                  type="button"
+                  onClick={handleRunEligibility}
+                  className="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold shrink-0 cursor-pointer"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
 
             {/* AI Result Card */}
             {eligibilityResult && (
@@ -386,9 +411,11 @@ export const JobDetailModal: React.FC = () => {
                 <label className="text-[11px] font-semibold text-slate-600 block mb-1">
                   Attached Resume:
                 </label>
-                <div className="flex items-center justify-between p-2.5 bg-white rounded-xl border border-slate-200 text-xs">
-                  <span className="font-medium text-slate-800">{user.resumeFileName}</span>
-                  <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-sm">
+                <div className="flex items-center justify-between gap-2 p-2.5 bg-white rounded-xl border border-slate-200 text-xs">
+                  <span className="font-medium text-slate-800 truncate">
+                    {user.resumeFileName || 'Profile Resume Summary'}
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-sm shrink-0">
                     Verified ATS Ready
                   </span>
                 </div>
@@ -422,13 +449,18 @@ export const JobDetailModal: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={appliedSuccess}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition-colors flex items-center gap-1.5"
+                  disabled={appliedSuccess || isSubmittingApply}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-60"
                 >
                   {appliedSuccess ? (
                     <>
                       <Check className="w-4 h-4" />
                       <span>Application Submitted!</span>
+                    </>
+                  ) : isSubmittingApply ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Submitting...</span>
                     </>
                   ) : (
                     <>
@@ -456,8 +488,11 @@ export const JobDetailModal: React.FC = () => {
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={async () => {
-                  // Auto-log external application in tracking state
-                  await applyForJob(job, 'Applied via official external portal redirect', eligibilityResult?.matchScore || 85);
+                  try {
+                    await applyForJob(job, 'Applied via official external portal redirect', eligibilityResult?.matchScore || 85);
+                  } catch {
+                    // Non-blocking when redirecting to external official portal
+                  }
                 }}
                 className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-md shadow-sky-600/20 transition-all cursor-pointer flex items-center gap-1.5"
               >

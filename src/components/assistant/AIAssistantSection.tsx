@@ -31,12 +31,14 @@ import {
   Target,
   Clock,
   Sparkle,
-  Volume1
+  Volume1,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { 
   askStudyAssistantDetailed, 
   requestTtsAudio, 
+  transcribeAudioApi,
   fetchPersonalizedRecommendations, 
   generatePersonalizedLearningPlan 
 } from '../../services/api';
@@ -72,6 +74,10 @@ export const AIAssistantSection: React.FC<{
     initialSubTab
   );
 
+  useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
+
   // Chat Language (English or Kannada)
   const [chatLanguage, setChatLanguage] = useState<'English' | 'Kannada'>(
     appLanguage === 'Kannada' ? 'Kannada' : 'English'
@@ -104,14 +110,41 @@ I analyze your verified profile to provide tailored guidance:
 Feel free to ask me anything in English or Kannada, or click one of the suggested prompts below!`;
   };
 
+  const storageKey = `ym_chat_sessions_${user.id || 'guest'}`;
+
+  // Build PII-free context for backend AI requests
+  const getSanitizedUserContext = () => ({
+    name: user.name ? user.name.split(' ')[0] : 'Student',
+    role: user.role,
+    branch: user.branch,
+    course: user.course,
+    education: user.education,
+    graduationYear: user.graduationYear,
+    skills: user.skills,
+    interests: user.interests,
+    preferredRoles: user.preferredRoles,
+    location: user.location,
+    currentRole: user.currentRole,
+    yearsOfExperience: user.yearsOfExperience,
+  });
+
   // Sessions and Active Chat state
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     try {
-      const saved = localStorage.getItem('ym_chat_sessions');
+      const saved = localStorage.getItem(storageKey);
       if (saved) return JSON.parse(saved);
     } catch {}
     return [];
   });
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      setSessions(saved ? JSON.parse(saved) : []);
+    } catch {
+      setSessions([]);
+    }
+  }, [storageKey]);
 
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => {
     return `session-${Date.now()}`;
@@ -130,6 +163,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedCodeIndex, setCopiedCodeIndex] = useState<string | null>(null);
@@ -139,16 +173,20 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
   // Recommendations state (for Guidance tab)
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [isLoadingRecs, setIsLoadingRecs] = useState(false);
+  const [recsError, setRecsError] = useState<string | null>(null);
 
   // Skill plan state (for Learning tab)
   const [learningPlanTarget, setLearningPlanTarget] = useState(user.preferredRoles?.[0] || 'Frontend React Developer');
   const [learningHours, setLearningHours] = useState(10);
   const [learningPlan, setLearningPlan] = useState<any | null>(null);
   const [isLoadingPlan, setIsLoadingPlan] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [completedTasks, setCompletedTasks] = useState<string[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   // Auto-scroll on new message
@@ -158,7 +196,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     }
   }, [messages, isLoading, activeSubTab]);
 
-  // Persist session to localStorage
+  // Persist session to user-scoped localStorage
   useEffect(() => {
     if (messages.length > 0) {
       const firstUserMsg = messages.find(m => m.sender === 'user');
@@ -177,11 +215,13 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
       setSessions(prev => {
         const filtered = prev.filter(s => s.id !== currentSessionId);
         const updated = [updatedSession, ...filtered].slice(0, 15);
-        localStorage.setItem('ym_chat_sessions', JSON.stringify(updated));
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(updated));
+        } catch {}
         return updated;
       });
     }
-  }, [messages, currentSessionId, chatLanguage]);
+  }, [messages, currentSessionId, chatLanguage, storageKey]);
 
   // Speech Recognition Setup (Kannada & English)
   useEffect(() => {
@@ -214,11 +254,12 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
 
   const loadRecommendations = async () => {
     setIsLoadingRecs(true);
+    setRecsError(null);
     try {
-      const recs = await fetchPersonalizedRecommendations(user);
+      const recs = await fetchPersonalizedRecommendations(getSanitizedUserContext());
       setRecommendations(recs);
-    } catch (err) {
-      console.warn('Failed to load personalized recommendations:', err);
+    } catch (err: any) {
+      setRecsError(err?.message || 'Failed to load personalized job recommendations.');
     } finally {
       setIsLoadingRecs(false);
     }
@@ -226,6 +267,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
 
   const handleGenerateLearningPlan = async () => {
     setIsLoadingPlan(true);
+    setPlanError(null);
     try {
       const plan = await generatePersonalizedLearningPlan(
         learningPlanTarget,
@@ -234,15 +276,37 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
         user.skills
       );
       setLearningPlan(plan);
-    } catch (err) {
-      console.warn('Failed to generate learning plan:', err);
+    } catch (err: any) {
+      setPlanError(err?.message || 'Failed to generate personalized learning plan.');
     } finally {
       setIsLoadingPlan(false);
     }
   };
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
+  const toggleListening = async () => {
+    if (recognitionRef.current) {
+      if (isListening) {
+        recognitionRef.current.stop();
+        setIsListening(false);
+      } else {
+        try {
+          recognitionRef.current.start();
+          setIsListening(true);
+        } catch {
+          setIsListening(false);
+        }
+      }
+      return;
+    }
+
+    // Fallback: MediaRecorder -> backend Gemini speech-to-text transcription
+    if (isListening && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
+      setIsListening(false);
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setMessages(prev => [
         ...prev,
         {
@@ -257,16 +321,64 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
       ]);
       return;
     }
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    } else {
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch {
-        setIsListening(false);
-      }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size === 0) return;
+        setIsTranscribing(true);
+        try {
+          const reader = new FileReader();
+          const base64: string = await new Promise((resolve, reject) => {
+            reader.onloadend = () => {
+              const result = String(reader.result || '');
+              resolve(result.includes(',') ? result.split(',')[1] : result);
+            };
+            reader.onerror = () => reject(new Error('Audio read failed'));
+            reader.readAsDataURL(blob);
+          });
+          const transcript = await transcribeAudioApi(base64, blob.type || 'audio/webm', chatLanguage);
+          if (transcript) {
+            setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          }
+        } catch (err: any) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `msg-${Date.now()}`,
+              sender: 'assistant',
+              text: err?.message || 'Unable to transcribe audio. Please type your question.',
+              time: 'Just now',
+              language: chatLanguage,
+            },
+          ]);
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsListening(true);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg-${Date.now()}`,
+          sender: 'assistant',
+          text: chatLanguage === 'Kannada'
+            ? 'ಮೈಕ್ರೋಫೋನ್ ಅನುಮತಿ ನಿರಾಕರಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ.'
+            : 'Microphone permission denied or unavailable. Please type your question.',
+          time: 'Just now',
+          language: chatLanguage,
+        },
+      ]);
     }
   };
 
@@ -351,7 +463,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
 
     try {
       const history = messages.map(m => ({ sender: m.sender, text: m.text }));
-      const res = await askStudyAssistantDetailed(textToSend, history, chatLanguage, user);
+      const res = await askStudyAssistantDetailed(textToSend, history, chatLanguage, getSanitizedUserContext());
 
       const assistantMsg: ChatMessage = {
         id: `ast-${Date.now()}`,
@@ -364,15 +476,15 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
       };
 
       setMessages(prev => [...prev, assistantMsg]);
-    } catch {
+    } catch (err: any) {
       setMessages(prev => [
         ...prev,
         {
           id: `err-${Date.now()}`,
           sender: 'assistant',
           text: chatLanguage === 'Kannada'
-            ? 'ಸರ್ವರ್ ಸಂಪರ್ಕದಲ್ಲಿ ತೊಂದರೆಯಾಗಿದೆ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಇಂಟರ್ನೆಟ್ ಸಂಪರ್ಕವನ್ನು ಪರಿಶೀಲಿಸಿ ಅಥವಾ ಮರುಪ್ರಯತ್ನಿಸಿ.'
-            : 'I encountered an issue connecting to the AI Mentor server. Please check your internet connection or try again.',
+            ? `ಸರ್ವರ್ ಸಂಪರ್ಕದಲ್ಲಿ ತೊಂದರೆಯಾಗಿದೆ: ${err?.message || 'ದಯವಿಟ್ಟು ಮರುಪ್ರಯತ್ನಿಸಿ.'}`
+            : `Unable to reach the AI Mentor server: ${err?.message || 'Please check your connection and try again.'}`,
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
@@ -386,6 +498,8 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     const lastUserMsg = [...messages].reverse().find(m => m.sender === 'user');
     if (!lastUserMsg) return;
 
+    const priorAssistant = messages[messages.length - 1]?.sender === 'assistant' ? messages[messages.length - 1] : null;
+
     // Remove the last assistant message
     setMessages(prev => {
       const copy = [...prev];
@@ -398,7 +512,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     setIsLoading(true);
     try {
       const history = messages.slice(0, -1).map(m => ({ sender: m.sender, text: m.text }));
-      const res = await askStudyAssistantDetailed(lastUserMsg.text, history, chatLanguage, user);
+      const res = await askStudyAssistantDetailed(lastUserMsg.text, history, chatLanguage, getSanitizedUserContext());
 
       const assistantMsg: ChatMessage = {
         id: `ast-${Date.now()}`,
@@ -410,8 +524,17 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
         relatedOpportunities: res.relatedOpportunities
       };
       setMessages(prev => [...prev, assistantMsg]);
-    } catch {
-      // Keep previous
+    } catch (err: any) {
+      setMessages(prev => [
+        ...prev,
+        ...(priorAssistant ? [priorAssistant] : []),
+        {
+          id: `err-${Date.now()}`,
+          sender: 'assistant',
+          text: err?.message || 'Failed to regenerate response. Please try again.',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]);
     } finally {
       setIsLoading(false);
     }
@@ -455,7 +578,9 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     e.stopPropagation();
     const updated = sessions.filter(s => s.id !== sessionId);
     setSessions(updated);
-    localStorage.setItem('ym_chat_sessions', JSON.stringify(updated));
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(updated));
+    } catch {}
     if (currentSessionId === sessionId) {
       handleStartNewChat();
     }
@@ -593,7 +718,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-50 dark:bg-orange-950/40 text-[#FF7A00] text-xs font-semibold uppercase tracking-wider mb-2">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Gemini 4 Hydrogen • AI Career Mentor</span>
+              <span>Gemini AI • Career Mentor</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <span>YuvaMitraa AI Career Mentor</span>
@@ -609,17 +734,17 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
           {/* Quick Profile Summary Badge */}
           <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200/70 dark:border-slate-700/60 flex items-center gap-3 shrink-0">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#FF7A00] to-amber-500 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-              {user.name.charAt(0)}
+              {(user.name || 'Y').charAt(0)}
             </div>
             <div className="text-left text-xs">
               <div className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1">
                 <span>{user.name}</span>
                 <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 dark:bg-emerald-950/60 px-1.5 py-0.2 rounded">
-                  {user.branch ? user.branch.split(' ')[0] : 'Student'}
+                  {user.branch ? user.branch.split(' ')[0] : user.role}
                 </span>
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
-                {user.college || 'National Institute of Technology'}
+                {user.college || user.institution || user.location || 'India'}
               </div>
             </div>
           </div>
@@ -1089,15 +1214,20 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
             <button
               type="button"
               onClick={toggleListening}
-              className={`p-2.5 sm:p-3 rounded-2xl border transition-all cursor-pointer flex items-center gap-1 ${
+              disabled={isTranscribing}
+              className={`p-2.5 sm:p-3 rounded-2xl border transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50 ${
                 isListening 
                   ? 'bg-red-500 text-white border-red-500 animate-pulse ring-4 ring-red-100' 
                   : 'border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
               }`}
-              title={isListening ? 'Listening...' : 'Voice input (English or Kannada)'}
+              title={isTranscribing ? 'Transcribing...' : isListening ? 'Listening...' : 'Voice input (English or Kannada)'}
             >
-              <Mic className="w-4 h-4" />
-              {isListening && <span className="text-[10px] font-bold hidden sm:inline">Listening...</span>}
+              {isTranscribing ? <Loader2 className="w-4 h-4 animate-spin text-[#FF7A00]" /> : <Mic className="w-4 h-4" />}
+              {(isListening || isTranscribing) && (
+                <span className="text-[10px] font-bold hidden sm:inline">
+                  {isTranscribing ? 'Transcribing...' : 'Listening...'}
+                </span>
+              )}
             </button>
 
             {/* Input field */}
@@ -1140,7 +1270,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
                 Personalized Career Guidance & Match Engine
               </h2>
               <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-2xl">
-                We continuously compare your education at <strong>{user.college || 'NIT Delhi'}</strong>, branch <strong>{user.branch || 'CSE'}</strong>, and verified skills against live corporate and government openings. Zero fake jobs.
+                We continuously compare your education at <strong>{user.college || user.institution || 'your institution'}</strong>, branch <strong>{user.branch || user.course || user.education || 'your field'}</strong>, and verified skills against live corporate and government openings. Zero fake jobs.
               </p>
             </div>
 
@@ -1159,41 +1289,41 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
             <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
               <span className="text-[11px] font-semibold text-slate-400 uppercase">Degree & College</span>
               <div className="text-sm font-bold text-slate-900 dark:text-white mt-1 truncate">
-                {user.branch || 'B.Tech CSE'}
+                {user.branch || user.course || user.education || 'Not specified'}
               </div>
               <span className="text-[11px] text-slate-500 truncate block mt-0.5">
-                {user.college || 'NIT Delhi'}
+                {user.college || user.institution || 'Add institution in profile'}
               </span>
             </div>
 
             <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
               <span className="text-[11px] font-semibold text-slate-400 uppercase">Academic Standing</span>
               <div className="text-sm font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                CGPA: {user.cgpa || '8.7'} / 10.0
+                {user.cgpa ? `CGPA: ${user.cgpa} / 10.0` : 'CGPA: Not added'}
               </div>
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Class of {user.graduationYear || '2026'}
+                {user.graduationYear ? `Class of ${user.graduationYear}` : 'Graduation year not set'}
               </span>
             </div>
 
             <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
               <span className="text-[11px] font-semibold text-slate-400 uppercase">Verified Skills</span>
               <div className="text-sm font-bold text-slate-900 dark:text-white mt-1">
-                {user.skills?.length || 8} Technical Skills
+                {user.skills?.length || 0} Technical Skills
               </div>
               <span className="text-[11px] text-[#FF7A00] font-semibold mt-0.5 block truncate">
-                {(user.skills || []).slice(0, 3).join(', ')}
+                {(user.skills || []).slice(0, 3).join(', ') || 'Add skills in profile'}
               </span>
             </div>
 
             <div className="bg-white dark:bg-slate-900 p-5 rounded-3xl border border-slate-200/80 dark:border-slate-800 shadow-2xs">
               <span className="text-[11px] font-semibold text-slate-400 uppercase">Market Match Status</span>
               <div className="text-sm font-bold text-slate-900 dark:text-white mt-1 flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span>Placement Ready</span>
+                <span className={`w-2 h-2 rounded-full ${(user.skills?.length || 0) >= 3 ? 'bg-emerald-500' : 'bg-amber-500'}`}></span>
+                <span>{(user.skills?.length || 0) >= 3 ? 'Placement Ready' : 'Profile Incomplete'}</span>
               </div>
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Top 15% Candidate Tier
+                {(user.skills?.length || 0) >= 3 ? 'Matched against verified drives' : 'Add skills to unlock AI matching'}
               </span>
             </div>
           </div>
@@ -1211,6 +1341,22 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
                 </p>
               </div>
             </div>
+
+            {recsError && (
+              <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{recsError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadRecommendations}
+                  className="px-3 py-1 rounded-lg bg-red-600 text-white font-bold text-[11px] hover:bg-red-700 cursor-pointer shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
 
             {isLoadingRecs ? (
               <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400">
@@ -1351,6 +1497,22 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
               </div>
             </div>
           </div>
+
+          {planError && (
+            <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{planError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleGenerateLearningPlan}
+                className="px-3 py-1 rounded-lg bg-red-600 text-white font-bold text-[11px] hover:bg-red-700 cursor-pointer shrink-0"
+              >
+                Retry
+              </button>
+            </div>
+          )}
 
           {/* Generated Learning Plan Output */}
           {learningPlan && (

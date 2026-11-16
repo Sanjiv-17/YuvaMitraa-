@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Award, 
   Download, 
@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   Building
 } from 'lucide-react';
-import jsPDF from 'jspdf';
 import { useApp } from '../../context/AppContext';
 import { Certificate } from '../../types';
 import { openExternalUrl } from '../../utils/navigation';
@@ -23,7 +22,14 @@ export const CertificateView: React.FC = () => {
     certificates[0] || null
   );
 
-  const handleDownloadPDF = (cert: Certificate) => {
+  useEffect(() => {
+    if (!activeCert && certificates.length > 0) {
+      setActiveCert(certificates[0]);
+    }
+  }, [certificates, activeCert]);
+
+  const handleDownloadPDF = async (cert: Certificate) => {
+    const { default: jsPDF } = await import('jspdf');
     const doc = new jsPDF({
       orientation: 'landscape',
       unit: 'mm',

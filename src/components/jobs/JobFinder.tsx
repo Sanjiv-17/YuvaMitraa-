@@ -58,6 +58,7 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   // AI Personalized Recommendations State
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
   const [showRecommendations, setShowRecommendations] = useState(false);
 
   // Voice Search State
@@ -144,17 +145,18 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   };
 
   // Fetch AI personalized recommendations
-  const handleFetchRecommendations = async () => {
+  const handleFetchRecommendations = async (forceRefresh = false) => {
     setShowRecommendations(true);
-    if (recommendations.length > 0) return;
+    setRecommendationsError(null);
+    if (!forceRefresh && recommendations.length > 0) return;
     setIsLoadingRecommendations(true);
     try {
       const res = await fetchPersonalizedRecommendationsApi(user, 6);
       if (res?.recommendations) {
         setRecommendations(res.recommendations);
       }
-    } catch (err) {
-      console.warn('Failed to fetch recommendations:', err);
+    } catch (err: any) {
+      setRecommendationsError(err?.message || 'Unable to generate AI smart matches right now.');
     } finally {
       setIsLoadingRecommendations(false);
     }
@@ -208,8 +210,18 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         return false;
       }
 
-      // Radius filter: Remote jobs always pass, else calculate distance
-      if (job.type !== 'remote' && maxRadiusKm < 100) {
+      // Radius filter: Remote & Pan-India/National jobs always pass, else calculate distance
+      const locLower = (job.location || '').toLowerCase().trim();
+      const isPanIndiaOrRemote =
+        job.type === 'remote' ||
+        locLower === 'india' ||
+        locLower.includes('pan-india') ||
+        locLower.includes('pan india') ||
+        locLower.includes('nationwide') ||
+        locLower.includes('anywhere') ||
+        locLower.includes('remote') ||
+        locLower.includes('work from home');
+      if (!isPanIndiaOrRemote && maxRadiusKm < 100) {
         const distance = calculateDistance(job.coordinates);
         if (distance > maxRadiusKm) {
           return false;
@@ -237,7 +249,7 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
           {/* AI Recommendations Trigger */}
           <button
-            onClick={handleFetchRecommendations}
+            onClick={() => handleFetchRecommendations(false)}
             disabled={isLoadingRecommendations}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white shadow-xs hover:shadow-md transition-all cursor-pointer"
           >
@@ -319,6 +331,17 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
             <div className="py-8 flex flex-col items-center justify-center text-xs text-slate-500 gap-2">
               <Loader2 className="w-5 h-5 animate-spin text-[#FF7A00]" />
               <span>Analyzing genuine live opportunities against your profile...</span>
+            </div>
+          ) : recommendationsError ? (
+            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
+              <span>{recommendationsError}</span>
+              <button
+                type="button"
+                onClick={() => handleFetchRecommendations(true)}
+                className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shrink-0 cursor-pointer"
+              >
+                Retry
+              </button>
             </div>
           ) : recommendations.length === 0 ? (
             <div className="text-xs text-slate-500 py-3">

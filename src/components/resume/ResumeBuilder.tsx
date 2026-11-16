@@ -20,9 +20,15 @@ import {
   TrendingUp,
   FileUp
 } from 'lucide-react';
-import jsPDF from 'jspdf';
 import { useApp } from '../../context/AppContext';
 import { reviewResumeWithATS, uploadResumeApi, generateResumeFromProfile, enhanceResumeBullet } from '../../services/api';
+import { extractPdfResumeText } from '../../utils/resumeParser';
+import {
+  auth,
+  onAuthStateChanged,
+  saveExtractedResumeToFirestore,
+  getSavedResumeFromFirestore
+} from '../../services/firebase';
 
 const RESUME_PRESETS = [
   {
@@ -115,8 +121,9 @@ export const ResumeBuilder: React.FC = () => {
   const { user, updateUser, authToken, courses } = useApp();
 
   const [targetRole, setTargetRole] = useState('Frontend React Developer / Intern');
-  const [resumeText, setResumeText] = useState(user?.resumeText || RESUME_PRESETS[0].text);
+  const [resumeText, setResumeText] = useState(user?.resumeText || '');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const [atsResult, setAtsResult] = useState<{
     atsScore: number;
     overallVerdict: string;
@@ -135,57 +142,140 @@ export const ResumeBuilder: React.FC = () => {
   const [isGeneratingProfile, setIsGeneratingProfile] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  // File Upload states
-  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  // Client-side PDF extraction & saved resume states
+  const [savedResumeName, setSavedResumeName] = useState<string | null>(
+    auth.currentUser && user?.resumeFileName ? user.resumeFileName : null
+  );
   const [isDragging, setIsDragging] = useState(false);
+  const [isReadingResume, setIsReadingResume] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [signInPrompt, setSignInPrompt] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // On page load (and auth changes), auto-fill Resume Content if signed-in user has a saved resume
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const loadSavedResume = async (uid: string) => {
+      try {
+        const saved = await getSavedResumeFromFirestore(uid);
+        if (cancelled) return;
+        if (saved && saved.text) {
+          setResumeText(saved.text);
+          setSavedResumeName(saved.fileName || 'resume.pdf');
+          updateUser({
+            resumeFileName: saved.fileName,
+            resumeText: saved.text,
+            resumeUpdatedAt: saved.updatedAt,
+          });
+        } else if (user?.resumeText && user?.resumeFileName) {
+          setResumeText(user.resumeText);
+          setSavedResumeName(user.resumeFileName);
+        }
+      } catch {
+        // Non-fatal read error; local context fallback remains available
+      }
+    };
+
+    if (auth.currentUser) {
+      void loadSavedResume(auth.currentUser.uid);
+    }
+
+    const unsub = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        setSignInPrompt(null);
+        void loadSavedResume(fbUser.uid);
+      } else {
+        setSavedResumeName(null);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
 
   // Generate complete resume from student profile
   const handleGenerateFromProfile = async () => {
     setIsGeneratingProfile(true);
+    setResumeError(null);
     try {
       const data = await generateResumeFromProfile(user, targetRole);
       if (data && data.resumeText) {
         setResumeText(data.resumeText);
-        updateUser({ resumeText: data.resumeText });
         const currentBadges = user?.badges || [];
         updateUser({
-          xpPoints: (user?.xpPoints ?? 1250) + 100,
+          resumeText: data.resumeText,
+          xpPoints: (user?.xpPoints ?? 0) + 100,
           badges: currentBadges.includes('AI Resume Pioneer') ? currentBadges : [...currentBadges, 'AI Resume Pioneer']
         });
       }
-    } catch (err) {
-      console.error('Failed to generate resume from profile:', err);
+    } catch (err: any) {
+      setResumeError(err?.message || 'Failed to generate resume from profile. Please try again.');
     } finally {
       setIsGeneratingProfile(false);
     }
   };
 
-  // File upload reader
-  const handleFileUpload = (file: File) => {
+  // Extract PDF text in-browser via pdf.js and optionally save to Firestore (users/{uid}/resume/current)
+  const handleFileUpload = async (file: File) => {
     if (!file) return;
-    setUploadedFileName(`${file.name} (${Math.round(file.size / 1024)} KB)`);
+    setResumeError(null);
+    setStatusMessage(null);
+    setSignInPrompt(null);
+    setIsReadingResume(true);
 
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const content = e.target?.result as string;
-      if (content) {
-        const fullContent = `${file.name.toUpperCase()} - UPLOADED EXTRACT:\n\n${content.slice(0, 4000)}`;
-        setResumeText(fullContent);
-        updateUser({
-          resumeFileName: file.name,
-          resumeText: fullContent
-        });
-        if (authToken) {
-          try {
-            await uploadResumeApi(authToken, file.name, fullContent);
-          } catch (err) {
-            console.warn('Sync resume upload err:', err);
-          }
-        }
+    try {
+      const extracted = await extractPdfResumeText(file);
+      const updatedAt = new Date().toISOString();
+
+      setResumeText(extracted.text);
+      setStatusMessage('Resume loaded ✓');
+
+      if (typeof auth.authStateReady === 'function') {
+        await auth.authStateReady();
       }
-    };
-    reader.readAsText(file);
+
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        updateUser({
+          resumeFileName: extracted.fileName,
+          resumeText: extracted.text,
+          resumeUpdatedAt: updatedAt,
+        });
+        setSignInPrompt('Sign in to save your resume.');
+        return;
+      }
+
+      const saved = await saveExtractedResumeToFirestore(currentUser.uid, {
+        fileName: extracted.fileName,
+        text: extracted.text,
+        updatedAt,
+      });
+
+      setSavedResumeName(saved.fileName);
+      updateUser({
+        resumeFileName: saved.fileName,
+        resumeText: saved.text,
+        resumeUpdatedAt: saved.updatedAt,
+      });
+
+      if (authToken) {
+        uploadResumeApi(authToken, {
+          resumeFileName: saved.fileName,
+          resumeText: saved.text,
+          resumeUpdatedAt: saved.updatedAt,
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      setResumeError(
+        err?.message ||
+          'No readable text found in this PDF. Please paste your resume text manually in the Resume Content box.'
+      );
+    } finally {
+      setIsReadingResume(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
@@ -198,17 +288,18 @@ export const ResumeBuilder: React.FC = () => {
 
   const handleRunATSCheck = async () => {
     setIsAnalyzing(true);
+    setResumeError(null);
     try {
       const data = await reviewResumeWithATS(resumeText, targetRole);
       setAtsResult(data);
       const currentBadges = user?.badges || [];
       updateUser({
         resumeText,
-        xpPoints: (user?.xpPoints ?? 1250) + 50,
+        xpPoints: (user?.xpPoints ?? 0) + 50,
         badges: currentBadges.includes('ATS Pro') ? currentBadges : [...currentBadges, 'ATS Pro']
       });
-    } catch (err) {
-      console.error('ATS evaluation error:', err);
+    } catch (err: any) {
+      setResumeError(err?.message || 'ATS evaluation failed. Please check your connection and try again.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -231,26 +322,17 @@ export const ResumeBuilder: React.FC = () => {
   const handleEnhanceBullet = async () => {
     if (!rawBullet.trim() || isEnhancing) return;
     setIsEnhancing(true);
+    setResumeError(null);
 
     try {
       const res = await enhanceResumeBullet(rawBullet, targetRole);
       if (res && Array.isArray(res.enhancedBullets) && res.enhancedBullets.length > 0) {
         setEnhancedBullets(res.enhancedBullets);
       } else {
-        const clean = rawBullet.trim().replace(/^[-•*]\s*/, '');
-        setEnhancedBullets([
-          `Spearheaded the development of ${clean}, driving a 34% increase in user efficiency and optimizing overall delivery timelines.`,
-          `Architected and deployed ${clean} leveraging modern best practices, reducing latency by 28% and ensuring high scalability.`,
-          `Engineered ${clean} with robust error handling and automated unit testing, boosting system uptime to 99.8% across 1,000+ student sessions.`
-        ]);
+        setResumeError('AI returned no enhanced bullet points. Please refine your input and try again.');
       }
-    } catch {
-      const clean = rawBullet.trim().replace(/^[-•*]\s*/, '');
-      setEnhancedBullets([
-        `Spearheaded the development of ${clean}, driving a 34% increase in user efficiency and optimizing overall delivery timelines.`,
-        `Architected and deployed ${clean} leveraging modern best practices, reducing latency by 28% and ensuring high scalability.`,
-        `Engineered ${clean} with robust error handling and automated unit testing, boosting system uptime to 99.8% across 1,000+ student sessions.`
-      ]);
+    } catch (err: any) {
+      setResumeError(err?.message || 'Failed to enhance bullet point with AI.');
     } finally {
       setIsEnhancing(false);
     }
@@ -266,16 +348,24 @@ export const ResumeBuilder: React.FC = () => {
     setResumeText((prev: string) => `${prev}\n• ${text}`);
   };
 
-  const handleDownloadResumePDF = () => {
+  const handleDownloadResumePDF = async () => {
+    if (!resumeText.trim()) {
+      setResumeError('Please enter or generate resume content before downloading a PDF.');
+      return;
+    }
+    const { default: jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(18);
-    doc.text(user.name.toUpperCase(), 15, 20);
+    doc.text((user.name || 'Candidate').toUpperCase(), 15, 20);
 
     doc.setFontSize(9.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(100, 116, 139);
-    doc.text(`${user.email} | ${user.phone} | ${user.location}`, 15, 26);
+    const contactLine = [user.email, user.phone, user.location].filter(Boolean).join(' | ');
+    if (contactLine) {
+      doc.text(contactLine, 15, 26);
+    }
 
     doc.setDrawColor(255, 122, 0);
     doc.setLineWidth(0.8);
@@ -288,7 +378,7 @@ export const ResumeBuilder: React.FC = () => {
     const splitLines = doc.splitTextToSize(resumeText, 180);
     doc.text(splitLines, 15, 38);
 
-    doc.save(`${user.name.replace(/\s+/g, '_')}_YuvaMitraa_Resume.pdf`);
+    doc.save(`${(user.name || 'Resume').replace(/\s+/g, '_')}_YuvaMitraa_Resume.pdf`);
   };
 
   return (
@@ -326,16 +416,26 @@ export const ResumeBuilder: React.FC = () => {
 
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition-colors"
+            disabled={isReadingResume}
+            className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs flex items-center gap-2 shadow-2xs cursor-pointer transition-colors disabled:opacity-50"
           >
-            <Upload className="w-4 h-4 text-[#FF7A00]" />
-            <span>Upload Resume</span>
+            {isReadingResume ? (
+              <Loader2 className="w-4 h-4 animate-spin text-[#FF7A00]" />
+            ) : (
+              <Upload className="w-4 h-4 text-[#FF7A00]" />
+            )}
+            <span>{isReadingResume ? 'Reading resume...' : 'Upload PDF Resume'}</span>
           </button>
           <input
             type="file"
             ref={fileInputRef}
-            onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
-            accept=".pdf,.docx,.txt"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) void handleFileUpload(f);
+            }}
+            accept="application/pdf,.pdf"
+            disabled={isReadingResume}
             className="hidden"
           />
 
@@ -348,6 +448,63 @@ export const ResumeBuilder: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Status & Sign-in Banners */}
+      {isReadingResume && (
+        <div className="p-3.5 rounded-2xl bg-sky-50 border border-sky-200 text-sky-900 text-xs flex items-center gap-2">
+          <Loader2 className="w-4 h-4 animate-spin text-[#0284C7] shrink-0" />
+          <span className="font-semibold">Reading resume...</span>
+        </div>
+      )}
+
+      {statusMessage && !isReadingResume && (
+        <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{statusMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStatusMessage(null)}
+            className="text-emerald-700 hover:underline font-bold text-[11px] cursor-pointer shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {signInPrompt && (
+        <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <FileCheck className="w-4 h-4 text-amber-600 shrink-0" />
+            <span className="font-semibold">{signInPrompt}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSignInPrompt(null)}
+            className="text-amber-700 hover:underline font-bold text-[11px] cursor-pointer shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Error Banner */}
+      {resumeError && (
+        <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{resumeError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setResumeError(null)}
+            className="text-red-700 hover:underline font-bold text-[11px] cursor-pointer shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Preset Starter Templates Picker */}
       <div className="bg-white p-3.5 rounded-2xl border border-slate-200/80 shadow-2xs flex items-center justify-between gap-3 flex-wrap">
@@ -399,19 +556,31 @@ export const ResumeBuilder: React.FC = () => {
               onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`p-4 rounded-2xl border-2 border-dashed transition-all cursor-pointer text-center ${
-                isDragging 
-                  ? 'border-[#FF7A00] bg-orange-50/50' 
-                  : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50 hover:border-slate-300'
+              onClick={() => !isReadingResume && fileInputRef.current?.click()}
+              className={`p-4 rounded-2xl border-2 border-dashed transition-all text-center ${
+                isReadingResume
+                  ? 'border-sky-300 bg-sky-50/60 cursor-wait'
+                  : isDragging
+                  ? 'border-[#FF7A00] bg-orange-50/50 cursor-pointer'
+                  : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50 hover:border-slate-300 cursor-pointer'
               }`}
             >
               <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-700">
-                <FileUp className="w-4 h-4 text-[#FF7A00]" />
-                <span>{uploadedFileName ? `Loaded: ${uploadedFileName}` : 'Drag & Drop PDF / DOCX resume here or Click to Browse'}</span>
+                {isReadingResume ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-[#0284C7]" />
+                ) : (
+                  <FileUp className="w-4 h-4 text-[#FF7A00]" />
+                )}
+                <span>
+                  {isReadingResume
+                    ? 'Reading resume...'
+                    : savedResumeName
+                    ? `Saved resume: ${savedResumeName}`
+                    : statusMessage || 'Select or Drag & Drop your PDF Resume'}
+                </span>
               </div>
-              <p className="text-[10px] text-slate-400 mt-0.5">
-                Supports PDF, DOCX, and TXT files for automated content extraction
+              <p className="text-[10px] text-slate-500 mt-1">
+                Upload a PDF (up to 5 MB). Text is extracted on your device.
               </p>
             </div>
 

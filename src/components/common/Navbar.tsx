@@ -39,7 +39,6 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
     setActiveTab,
     activeTab,
     logout,
-    openAuthModal,
     viewportMode,
     toggleViewportMode
   } = useApp();
@@ -65,24 +64,24 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs transition-colors">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         
         {/* Brand Logo & Tagline */}
         <div 
           onClick={() => setActiveTab(isAdmin ? 'admin' : isRecruiter ? 'recruiter' : isExperienced ? 'experienced' : 'home')}
-          className="flex items-center gap-2.5 cursor-pointer shrink-0 group"
+          className="flex items-center gap-2 sm:gap-2.5 cursor-pointer shrink-0 group"
         >
           <img
             src="/logo.png"
             alt="YuvaMitraa"
-            className="w-10 h-10 object-contain rounded-xl drop-shadow-xs group-hover:scale-105 transition-transform"
+            className="w-8 h-8 sm:w-10 sm:h-10 object-contain rounded-xl drop-shadow-xs group-hover:scale-105 transition-transform"
           />
           <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xl font-bold tracking-tight text-slate-900">
+            <div className="flex items-center gap-1 sm:gap-1.5">
+              <span className="text-base sm:text-xl font-bold tracking-tight text-slate-900">
                 Yuva<span className="text-[#FF7A00]">Mitraa</span>
               </span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider bg-[#E6F4FF] text-[#0284C7] px-1.5 py-0.5 rounded-sm">
+              <span className="text-[9px] sm:text-[10px] font-semibold uppercase tracking-wider bg-[#E6F4FF] text-[#0284C7] px-1 sm:px-1.5 py-0.5 rounded-sm">
                 IN
               </span>
             </div>
@@ -108,7 +107,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
         </form>
 
         {/* Right Navigation & Utility Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1 sm:gap-3 shrink-0">
           
           {/* User Role Quick Badge */}
           {isAdmin ? (
@@ -233,26 +232,32 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                 </div>
 
                 <div className="max-h-72 overflow-y-auto space-y-1.5 py-2">
-                  {notifications.map((notif) => (
-                    <div
-                      key={notif.id}
-                      onClick={() => {
-                        markNotificationRead(notif.id);
-                        if (notif.actionTab) setActiveTab(notif.actionTab);
-                        setShowNotifMenu(false);
-                      }}
-                      className={`p-2.5 rounded-xl text-left cursor-pointer transition-colors flex items-start gap-2.5 ${
-                        !notif.read ? 'bg-orange-50/60 dark:bg-slate-800/80 border border-orange-100 dark:border-slate-700' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                      }`}
-                    >
-                      <div className="w-2 h-2 rounded-full bg-[#FF7A00] mt-1.5 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{notif.title}</p>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 mt-0.5">{notif.message}</p>
-                        <span className="text-[9px] font-semibold text-slate-400 mt-1 block">{notif.date}</span>
-                      </div>
+                  {notifications.length === 0 ? (
+                    <div className="px-3 py-6 text-center text-xs text-slate-400">
+                      No notifications yet
                     </div>
-                  ))}
+                  ) : (
+                    notifications.map((notif) => (
+                      <div
+                        key={notif.id}
+                        onClick={() => {
+                          markNotificationRead(notif.id);
+                          if (notif.actionTab) setActiveTab(notif.actionTab);
+                          setShowNotifMenu(false);
+                        }}
+                        className={`p-2.5 rounded-xl text-left cursor-pointer transition-colors flex items-start gap-2.5 ${
+                          !notif.read ? 'bg-orange-50/60 dark:bg-slate-800/80 border border-orange-100 dark:border-slate-700' : 'hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                        }`}
+                      >
+                        <div className="w-2 h-2 rounded-full bg-[#FF7A00] mt-1.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{notif.title}</p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2 mt-0.5">{notif.message}</p>
+                          <span className="text-[9px] font-semibold text-slate-400 mt-1 block">{notif.date}</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             )}
@@ -261,7 +266,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
           {/* Device Viewport Mode Switcher (Desktop vs Mobile Screen) */}
           <button
             onClick={toggleViewportMode}
-            className={`p-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 text-xs font-semibold ${
+            className={`hidden sm:flex p-2 rounded-xl transition-all cursor-pointer items-center gap-1.5 text-xs font-semibold ${
               viewportMode === 'mobile'
                 ? 'bg-orange-100 text-[#FF7A00] font-bold'
                 : 'text-slate-600 hover:bg-slate-100'
@@ -296,11 +301,17 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
               onClick={() => setShowUserMenu(!showUserMenu)}
               className="flex items-center gap-2 p-1 pl-2 pr-1.5 rounded-full hover:bg-slate-100 transition-colors border border-slate-200"
             >
-              <img
-                src={user.photoUrl}
-                alt={user.name}
-                className="w-7 h-7 rounded-full object-cover border border-orange-300"
-              />
+              {user.photoUrl ? (
+                <img
+                  src={user.photoUrl}
+                  alt={user.name || 'User'}
+                  className="w-7 h-7 rounded-full object-cover border border-orange-300"
+                />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-[#FF7A00] text-white text-xs font-bold flex items-center justify-center border border-orange-300">
+                  {(user?.name || 'Y').charAt(0).toUpperCase()}
+                </div>
+              )}
               <div className="flex flex-col text-left hidden sm:block">
                 <span className="text-xs font-bold text-slate-700 max-w-[80px] truncate leading-tight block">
                   {(user?.name || 'Member').split(' ')[0]}
@@ -329,9 +340,13 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                   </div>
                   <p className="text-[11px] text-slate-500 truncate mt-0.5">{user.email}</p>
                   <div className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-slate-600">
-                    <span>{user.phone ? `+91 ${user.phone}` : ''}</span>
-                    <span>•</span>
-                    <span className="text-[#FF7A00] font-bold">⭐ {user.xpPoints} XP</span>
+                    {user.phone && (
+                      <>
+                        <span>+91 {user.phone}</span>
+                        <span>•</span>
+                      </>
+                    )}
+                    <span className="text-[#FF7A00] font-bold">⭐ {user.xpPoints ?? 0} XP</span>
                   </div>
                 </div>
 
@@ -413,7 +428,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
 
                 <button
                   onClick={() => {
-                    openAuthModal('login');
+                    logout();
                     setShowUserMenu(false);
                   }}
                   className="w-full px-3.5 py-2 text-left text-xs text-[#FF7A00] font-bold hover:bg-orange-50 flex items-center gap-2 cursor-pointer"

@@ -16,10 +16,11 @@ import {
   Layers,
   ChevronRight,
   TrendingUp,
-  Volume1
+  Volume1,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { practiceMockInterview } from '../../services/api';
+import { practiceMockInterview, transcribeAudioApi } from '../../services/api';
 
 const INTERVIEW_STAGES = [
   { id: 'screening', label: 'Round 1: Screening & HR', desc: 'Background, cultural fit, strengths & career goals' },
@@ -119,11 +120,14 @@ export const MockInterview: React.FC = () => {
   const [userAnswer, setUserAnswer] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isSpeakingModel, setIsSpeakingModel] = useState<number | null>(null);
   const [questionCount, setQuestionCount] = useState(1);
   const [timerSeconds, setTimerSeconds] = useState(90);
   const [isTimerActive, setIsTimerActive] = useState(false);
+  const [evalError, setEvalError] = useState<string | null>(null);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
 
   const [interviewHistory, setInterviewHistory] = useState<Array<{
     question: string;
@@ -135,6 +139,8 @@ export const MockInterview: React.FC = () => {
   }>>([]);
 
   const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Sync question when role, stage or language changes
   useEffect(() => {
@@ -178,26 +184,79 @@ export const MockInterview: React.FC = () => {
     }
   }, [interviewLanguage]);
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      if (!userAnswer) {
-        setUserAnswer(interviewLanguage === 'Kannada' 
-          ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಲಭ್ಯವಿಲ್ಲ - ದಯವಿಟ್ಟು ಇಲ್ಲಿ ನಿಮ್ಮ ಉತ್ತರವನ್ನು ಟೈಪ್ ಮಾಡಿ.' 
-          : 'Voice input is not supported in this browser. Please type your response here.');
+  const toggleListening = async () => {
+    setVoiceNotice(null);
+
+    if (recognitionRef.current) {
+      if (isListening) {
+        recognitionRef.current.stop();
+        setIsListening(false);
+      } else {
+        try {
+          recognitionRef.current.start();
+          setIsListening(true);
+          if (!isTimerActive) setIsTimerActive(true);
+        } catch {
+          setIsListening(false);
+        }
       }
       return;
     }
-    if (isListening) {
-      recognitionRef.current.stop();
+
+    // Fallback: MediaRecorder -> backend Gemini speech-to-text transcription
+    if (isListening && mediaRecorderRef.current) {
+      mediaRecorderRef.current.stop();
       setIsListening(false);
-    } else {
-      try {
-        recognitionRef.current.start();
-        setIsListening(true);
-        if (!isTimerActive) setIsTimerActive(true);
-      } catch (e) {
-        setIsListening(false);
-      }
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceNotice(
+        interviewLanguage === 'Kannada'
+          ? 'ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಧ್ವನಿ ರೆಕಾರ್ಡಿಂಗ್ ಲಭ್ಯವಿಲ್ಲ. ದಯವಿಟ್ಟು ಕೆಳಗಿನ ಬಾಕ್ಸ್‌ನಲ್ಲಿ ನಿಮ್ಮ ಉತ್ತರವನ್ನು ಟೈಪ್ ಮಾಡಿ.'
+          : 'Microphone recording is not supported in this browser. Please type your response below.'
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size === 0) return;
+        setIsTranscribing(true);
+        try {
+          const reader = new FileReader();
+          const base64: string = await new Promise((resolve, reject) => {
+            reader.onloadend = () => {
+              const result = String(reader.result || '');
+              resolve(result.includes(',') ? result.split(',')[1] : result);
+            };
+            reader.onerror = () => reject(new Error('Failed to read audio recording'));
+            reader.readAsDataURL(blob);
+          });
+          const transcript = await transcribeAudioApi(base64, blob.type || 'audio/webm', interviewLanguage);
+          if (transcript) {
+            setUserAnswer((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          }
+        } catch (err: any) {
+          setVoiceNotice(err?.message || 'Audio transcription failed. Please type your answer.');
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsListening(true);
+      if (!isTimerActive) setIsTimerActive(true);
+    } catch {
+      setVoiceNotice('Microphone permission was denied or unavailable. Please type your answer.');
     }
   };
 
@@ -240,6 +299,7 @@ export const MockInterview: React.FC = () => {
   const handleSubmitAnswer = async () => {
     if (!userAnswer.trim() || isSubmitting) return;
     setIsSubmitting(true);
+    setEvalError(null);
     setIsTimerActive(false);
 
     try {
@@ -272,11 +332,11 @@ export const MockInterview: React.FC = () => {
       // Award XP
       const currentBadges = user?.badges || [];
       updateUser({
-        xpPoints: (user?.xpPoints ?? 1250) + 75,
+        xpPoints: (user?.xpPoints ?? 0) + 75,
         badges: currentBadges.includes('Interview Ace') ? currentBadges : [...currentBadges, 'Interview Ace']
       });
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setEvalError(err?.message || 'Failed to evaluate your answer with AI. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -436,19 +496,42 @@ export const MockInterview: React.FC = () => {
               />
             </div>
 
+            {(evalError || voiceNotice) && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{evalError || voiceNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setEvalError(null); setVoiceNotice(null); }}
+                  className="text-red-700 font-bold hover:underline shrink-0 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
             {/* Controls */}
             <div className="flex items-center justify-between gap-3 pt-1">
               <button
                 type="button"
                 onClick={toggleListening}
-                className={`py-2.5 px-4 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                disabled={isTranscribing}
+                className={`py-2.5 px-4 rounded-xl border text-xs font-bold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50 ${
                   isListening
                     ? 'bg-red-500 text-white border-red-500 animate-pulse'
                     : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                 }`}
               >
-                {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4 text-[#FF7A00]" />}
-                <span>{isListening ? 'Stop Recording' : 'Speak Answer'}</span>
+                {isTranscribing ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-[#FF7A00]" />
+                ) : isListening ? (
+                  <MicOff className="w-4 h-4" />
+                ) : (
+                  <Mic className="w-4 h-4 text-[#FF7A00]" />
+                )}
+                <span>{isTranscribing ? 'Transcribing...' : isListening ? 'Stop Recording' : 'Speak Answer'}</span>
               </button>
 
               <button

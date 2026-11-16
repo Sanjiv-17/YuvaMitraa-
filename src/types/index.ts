@@ -69,7 +69,7 @@ export interface UserProfile {
   };
   resumeText: string;
   resumeFileName: string;
-  resumeUrl?: string;
+  resumeUpdatedAt?: string;
   streakDays: number;
   xpPoints: number;
   badges: string[];
