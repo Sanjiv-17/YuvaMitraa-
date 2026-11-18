@@ -226,7 +226,7 @@ export const ExperiencedDashboard: React.FC = () => {
                     </span>
                     <span className="flex items-center gap-1">
                       <Clock className="w-3.5 h-3.5" />
-                      {job.stipend}
+                      {job.stipend || job.duration || 'Compensation not disclosed'}
                     </span>
                   </div>
                 </div>

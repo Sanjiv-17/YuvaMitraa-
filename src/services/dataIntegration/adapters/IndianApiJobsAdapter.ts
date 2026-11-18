@@ -1,5 +1,10 @@
 import { IDataSourceAdapter, AdapterSyncResult } from '../types';
 import { JobListing, SourceAdapterInfo } from '../../../types';
+import {
+  formatCredentialConfigMessage,
+  isValidHttpEndpoint,
+  validateHeaderCredential,
+} from '../credentialUtils';
 
 /**
  * IndianAPI Jobs API Adapter
@@ -19,16 +24,16 @@ export class IndianApiJobsAdapter implements IDataSourceAdapter {
   readonly documentationUrl = 'https://indianapi.in/documentation/jobs-api';
   readonly description = 'External Indian job market API providing verified listings across tech, finance, marketing, and operations with genuine apply URLs.';
 
-  private apiKey: string;
-  private baseUrl: string;
+  private get apiKey(): string {
+    return (process.env.INDIANAPI_KEY || process.env.JOB_API_KEY || '').trim();
+  }
 
-  constructor() {
-    this.apiKey = process.env.INDIANAPI_KEY || process.env.JOB_API_KEY || '';
-    this.baseUrl = process.env.INDIANAPI_BASE_URL || 'https://indianapi.in/api/v1/jobs';
+  private get baseUrl(): string {
+    return (process.env.INDIANAPI_BASE_URL || 'https://indianapi.in/api/v1/jobs').trim();
   }
 
   isConfigured(): boolean {
-    return Boolean(this.apiKey && this.apiKey.trim().length > 0);
+    return validateHeaderCredential(this.apiKey).valid && isValidHttpEndpoint(this.baseUrl);
   }
 
   getInfo(totalListings = 0, lastSyncAt = new Date().toISOString()): SourceAdapterInfo {
@@ -51,8 +56,9 @@ export class IndianApiJobsAdapter implements IDataSourceAdapter {
 
   async fetchAndNormalize(): Promise<AdapterSyncResult> {
     const now = new Date().toISOString();
+    const keyValidation = validateHeaderCredential(this.apiKey);
 
-    if (!this.isConfigured()) {
+    if (!keyValidation.valid) {
       return {
         sourceName: this.name,
         sourceId: this.id,
@@ -62,7 +68,26 @@ export class IndianApiJobsAdapter implements IDataSourceAdapter {
         updatedCount: 0,
         duplicateCount: 0,
         expiredCount: 0,
-        errorMessage: 'INDIANAPI_KEY is an optional credential and not currently configured. Source skipped until a valid API key is set in .env. Documentation: https://indianapi.in/documentation/jobs-api',
+        errorMessage: formatCredentialConfigMessage(
+          'INDIANAPI_KEY',
+          keyValidation,
+          this.documentationUrl
+        ),
+        jobs: [],
+      };
+    }
+
+    if (!isValidHttpEndpoint(this.baseUrl)) {
+      return {
+        sourceName: this.name,
+        sourceId: this.id,
+        status: 'CONFIG_REQUIRED',
+        fetchedCount: 0,
+        insertedCount: 0,
+        updatedCount: 0,
+        duplicateCount: 0,
+        expiredCount: 0,
+        errorMessage: `INDIANAPI_BASE_URL is invalid. Verify endpoint URL format. Documentation: ${this.documentationUrl}`,
         jobs: [],
       };
     }
@@ -76,7 +101,7 @@ export class IndianApiJobsAdapter implements IDataSourceAdapter {
       const response = await fetch(url.toString(), {
         method: 'GET',
         headers: {
-          'X-Api-Key': this.apiKey,
+          'X-Api-Key': keyValidation.sanitized,
           'Accept': 'application/json',
           'User-Agent': 'YuvaMitraa-Career-Integration/1.0',
         },
@@ -87,7 +112,7 @@ export class IndianApiJobsAdapter implements IDataSourceAdapter {
         return {
           sourceName: this.name,
           sourceId: this.id,
-          status: 'FAILED',
+          status: 'CONFIG_REQUIRED',
           fetchedCount: 0,
           insertedCount: 0,
           updatedCount: 0,
@@ -188,17 +213,21 @@ export class IndianApiJobsAdapter implements IDataSourceAdapter {
       };
 
     } catch (err: any) {
-      console.warn(`[IndianAPI Adapter] Fetch failed: ${err.message}`);
+      const message = err?.message || 'Unknown connection error';
+      const isCredentialFormatErr = /ByteString/i.test(message);
+      console.info(`[IndianAPI Adapter] Fetch skipped/failed: ${message}`);
       return {
         sourceName: this.name,
         sourceId: this.id,
-        status: 'FAILED',
+        status: isCredentialFormatErr ? 'CONFIG_REQUIRED' : 'FAILED',
         fetchedCount: 0,
         insertedCount: 0,
         updatedCount: 0,
         duplicateCount: 0,
         expiredCount: 0,
-        errorMessage: `Failed to connect to IndianAPI endpoint: ${err.message}`,
+        errorMessage: isCredentialFormatErr
+          ? `INDIANAPI_KEY contains characters incompatible with HTTP headers. Replace it with a raw ASCII key in .env.`
+          : `Failed to connect to IndianAPI endpoint: ${message}`,
         jobs: [],
       };
     }

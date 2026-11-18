@@ -56,7 +56,12 @@ export interface UserProfile {
   verificationStatus?: 'pending' | 'verified' | 'rejected';
   verificationEvidence?: string;
   preferredRoles?: string[];
+  preferredDomain?: string;
+  careerGoals?: string;
+  preferredLocation?: string;
+  workModePreference?: 'Online' | 'Offline' | 'Hybrid' | 'Any';
   skills: string[];
+  nonTechnicalSkills?: string[];
   interests: string[];
   projects?: StudentProject[];
   githubUrl?: string;
@@ -160,6 +165,9 @@ export type OpportunitySource =
   | 'National Career Service (NCS)'
   | 'AICTE Portal'
   | 'IndianAPI Jobs'
+  | 'Arbeitnow'
+  | 'Remotive'
+  | 'Firestore Verified'
   | 'Verified Partner'
   | string;
 
@@ -348,6 +356,8 @@ export interface InternshipListing {
   id: string;
   title: string;
   companyName: string;
+  companyLogo?: string;
+  category?: Job['category'];
   description: string;
   eligibility: string;
   skills: string[];
@@ -371,6 +381,8 @@ export interface JobListing {
   id: string;
   title: string;
   companyName: string;
+  companyLogo?: string;
+  category?: Job['category'];
   description: string;
   requiredSkills: string[];
   location: string;
@@ -413,3 +425,58 @@ export interface SourceAdapterInfo {
   documentationUrl?: string;
   description: string;
 }
+
+export interface InternshipMatchBreakdown {
+  skillsScore: number;             // Weight: 40%
+  interestScore: number;           // Weight: 25%
+  educationScore: number;          // Weight: 20%
+  careerGoalScore: number;         // Weight: 10%
+  locationPreferenceScore: number; // Weight: 5%
+}
+
+export interface SkillGapCourseSuggestion {
+  skill: string;
+  courseId?: string;
+  courseTitle: string;
+  provider: string;
+  duration?: string;
+  resourceUrl?: string;
+  reason: string;
+}
+
+export interface InternshipRecommendation {
+  internshipId: string;
+  jobId?: string;
+  title: string;
+  companyName: string;
+  requiredSkills: string[];
+  eligibility: string;
+  stipend: string;
+  duration: string;
+  workMode: string;
+  location: string;
+  applicationDeadline: string;
+  applyUrl: string;
+  sourceName: string;
+  isVerified: boolean;
+  matchScore: number;
+  matchTier: 'Excellent' | 'Very Good' | 'Good' | 'Moderate' | 'Low Match';
+  breakdown: InternshipMatchBreakdown;
+  matchReason: string;
+  matchedSkills: string[];
+  missingSkills: string[];
+  suggestedResources: SkillGapCourseSuggestion[];
+  isBeginnerFriendly: boolean;
+  generatedAt: string;
+}
+
+export interface StudentRecommendationBundle {
+  userId: string;
+  profileSignature: string;
+  recommendations: InternshipRecommendation[];
+  overallMissingSkills: string[];
+  topSkillGapResources: SkillGapCourseSuggestion[];
+  beginnerFriendlyCount: number;
+  updatedAt: string;
+}
+

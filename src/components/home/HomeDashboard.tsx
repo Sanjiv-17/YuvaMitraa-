@@ -21,6 +21,7 @@ import { useApp } from '../../context/AppContext';
 import { Job, Course } from '../../types';
 import { SAMPLE_GOVT_SCHEMES } from '../../data/mockData';
 import { DailyGoalCard } from './DailyGoalCard';
+import { RecommendedForYou } from '../recommendations/RecommendedForYou';
 
 export const HomeDashboard: React.FC = () => {
   const { 
@@ -303,6 +304,9 @@ export const HomeDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Personalized AI Internship Matching Section */}
+      <RecommendedForYou compact />
+
       {/* Main Split: Recommended Jobs & Ongoing Courses */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
@@ -336,9 +340,9 @@ export const HomeDashboard: React.FC = () => {
                 >
                   <div className="flex items-start gap-3.5">
                     <img
-                      src={job.companyLogo}
+                      src={job.companyLogo || `https://ui-avatars.com/api/?name=${encodeURIComponent(job.company || 'YM')}&background=FF7A00&color=fff`}
                       alt={job.company}
-                      className="w-12 h-12 rounded-xl object-cover border border-slate-100 shrink-0"
+                      className="w-12 h-12 rounded-xl object-cover border border-slate-100 shrink-0 bg-slate-50"
                     />
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -357,7 +361,7 @@ export const HomeDashboard: React.FC = () => {
 
                       <p className="text-xs text-slate-600 font-medium">{job.company}</p>
 
-                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 pt-0.5">
+                      <div className="flex flex-wrap items-center gap-2.5 text-[11px] text-slate-500 pt-0.5">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-slate-400" />
                           <span>{job.location}</span>
@@ -365,13 +369,21 @@ export const HomeDashboard: React.FC = () => {
                             <span className="text-[#FF7A00] font-semibold">({distance} km)</span>
                           )}
                         </span>
-                        <span>•</span>
-                        <span className="font-semibold text-slate-700">{job.stipend}</span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-slate-400" />
-                          <span>{job.duration}</span>
-                        </span>
+                        {job.stipend && (
+                          <>
+                            <span>•</span>
+                            <span className="font-semibold text-slate-700">{job.stipend}</span>
+                          </>
+                        )}
+                        {job.duration && (
+                          <>
+                            <span>•</span>
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-slate-400" />
+                              <span>{job.duration}</span>
+                            </span>
+                          </>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5 pt-1.5">

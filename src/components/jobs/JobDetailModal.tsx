@@ -22,11 +22,14 @@ import { useApp } from '../../context/AppContext';
 import { Job, EligibilityResult } from '../../types';
 import { checkEligibility } from '../../services/api';
 import { openExternalUrl } from '../../utils/navigation';
+import { isRemoteOrGlobalLocation } from '../../utils/opportunityFilter';
 
 export const JobDetailModal: React.FC = () => {
   const { 
     selectedJobForDetail, 
     setSelectedJobForDetail, 
+    openApplyModal,
+    setOpenApplyModal,
     user, 
     applyForJob, 
     savedJobIds, 
@@ -53,18 +56,24 @@ export const JobDetailModal: React.FC = () => {
       );
       setEligibilityResult(null);
       setEligibilityError(null);
-      setIsApplying(false);
+      setIsApplying(Boolean(openApplyModal));
       setIsSubmittingApply(false);
       setAppliedSuccess(false);
       setApplyErrorMessage(null);
     }
-  }, [selectedJobForDetail?.id]);
+  }, [selectedJobForDetail?.id, openApplyModal]);
+
+  const handleCloseModal = () => {
+    setOpenApplyModal(false);
+    setSelectedJobForDetail(null);
+  };
 
   if (!selectedJobForDetail) return null;
 
   const job = selectedJobForDetail;
   const isSaved = (savedJobIds || []).includes(job.id);
-  const distance = calculateDistance(job.coordinates);
+  const isRemoteOrGlobal = isRemoteOrGlobalLocation(job.location, job.type, job.opportunitySource);
+  const distance = !isRemoteOrGlobal ? calculateDistance(job.coordinates) : 0;
 
   const handleRunEligibility = async () => {
     setIsCheckingAI(true);
@@ -102,7 +111,8 @@ export const JobDetailModal: React.FC = () => {
   };
 
   const handleShareWhatsapp = () => {
-    const text = `Check out this opening on YuvaMitraa: ${job.title} at ${job.company} (${job.stipend}). Location: ${job.location}`;
+    const comp = job.stipend ? ` (${job.stipend})` : '';
+    const text = `Check out this opening on YuvaMitraa: ${job.title} at ${job.company}${comp}. Location: ${job.location}`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     openExternalUrl(url);
   };
@@ -137,14 +147,16 @@ export const JobDetailModal: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs font-semibold text-slate-600 mt-0.5">{job.company}</p>
-              <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+              <div className="flex flex-wrap items-center gap-2.5 text-xs text-slate-500 mt-1">
                 <span className="flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-slate-400" />
                   <span>{job.location}</span>
                   {distance > 0 && <span className="text-[#FF7A00] font-bold">({distance} km)</span>}
                 </span>
                 <span>•</span>
-                <span className="font-bold text-[#FF7A00]">{job.stipend}</span>
+                <span className="font-bold text-[#FF7A00]">
+                  {job.stipend || 'Compensation not disclosed'}
+                </span>
               </div>
             </div>
           </div>
@@ -167,7 +179,7 @@ export const JobDetailModal: React.FC = () => {
               <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-[#FF7A00]' : ''}`} />
             </button>
             <button
-              onClick={() => setSelectedJobForDetail(null)}
+              onClick={handleCloseModal}
               className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
             >
               <X className="w-5 h-5" />
@@ -323,7 +335,7 @@ export const JobDetailModal: React.FC = () => {
                   </div>
                   <button
                     onClick={() => {
-                      setSelectedJobForDetail(null);
+                      handleCloseModal();
                       setActiveTab('courses');
                     }}
                     className="px-3 py-1.5 bg-[#0284C7] hover:bg-sky-600 text-white text-xs font-bold rounded-lg shrink-0 shadow-xs cursor-pointer"
@@ -361,43 +373,49 @@ export const JobDetailModal: React.FC = () => {
           {/* Job Overview & Responsibilities */}
           <div className="space-y-3">
             <h3 className="text-sm font-bold text-slate-900">About the Role</h3>
-            <p className="text-xs text-slate-600 leading-relaxed">{job.description}</p>
+            <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-line">{job.description}</p>
           </div>
 
-          <div className="space-y-3">
-            <h3 className="text-sm font-bold text-slate-900">Key Responsibilities</h3>
-            <ul className="space-y-1.5 text-xs text-slate-600">
-              {(job.responsibilities || []).map((r, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#FF7A00] mt-1.5 shrink-0" />
-                  <span>{r}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="space-y-3">
-            <h3 className="text-sm font-bold text-slate-900">Required Skills</h3>
-            <div className="flex flex-wrap gap-1.5">
-              {(job.requiredSkills || []).map((sk, i) => (
-                <span key={i} className="text-xs font-medium bg-slate-100 text-slate-700 px-3 py-1 rounded-lg">
-                  {sk}
-                </span>
-              ))}
+          {(job.responsibilities || []).length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">Key Responsibilities</h3>
+              <ul className="space-y-1.5 text-xs text-slate-600">
+                {(job.responsibilities || []).map((r, i) => (
+                  <li key={i} className="flex items-start gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#FF7A00] mt-1.5 shrink-0" />
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
-          </div>
+          )}
 
-          <div className="space-y-3">
-            <h3 className="text-sm font-bold text-slate-900">Perks & Benefits</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {(job.perks || []).map((p, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                  <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                  <span>{p}</span>
-                </div>
-              ))}
+          {(job.requiredSkills || []).length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">Required Skills</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {(job.requiredSkills || []).map((sk, i) => (
+                  <span key={i} className="text-xs font-medium bg-slate-100 text-slate-700 px-3 py-1 rounded-lg">
+                    {sk}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+
+          {(job.perks || []).length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">Perks & Benefits</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {(job.perks || []).map((p, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-slate-700 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                    <Check className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+                    <span>{p}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Application Form Drawer / Inline Section */}
           {isApplying && (
@@ -496,7 +514,13 @@ export const JobDetailModal: React.FC = () => {
                 }}
                 className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-md shadow-sky-600/20 transition-all cursor-pointer flex items-center gap-1.5"
               >
-                <span>Apply on Official Portal</span>
+                <span>
+                  {job.opportunitySource === 'Remotive'
+                    ? 'Apply on Remotive'
+                    : job.opportunitySource === 'Arbeitnow'
+                    ? 'Apply on Arbeitnow'
+                    : 'Apply on Official Portal'}
+                </span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
             )}

@@ -205,7 +205,9 @@ export async function loginApi(identifier: string, password: string, rememberMe:
   });
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to authenticate');
+    const err: any = new Error(data.error || 'Failed to authenticate');
+    if (data.code) err.code = data.code;
+    throw err;
   }
   return data;
 }
@@ -1021,11 +1023,15 @@ export async function toggleIntegrationSourceApi(token: string, sourceId: string
   return data;
 }
 
-export async function fetchPersonalizedRecommendationsApi(studentProfile: any, limit: number = 6) {
+export async function fetchPersonalizedRecommendationsApi(
+  studentProfile: any,
+  limit: number = 8,
+  firestoreInternships: any[] = []
+) {
   const res = await fetch('/api/external/recommendations', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ studentProfile, limit })
+    body: JSON.stringify({ studentProfile, limit, firestoreInternships })
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Failed to fetch personalized recommendations');

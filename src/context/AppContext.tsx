@@ -7,7 +7,9 @@ import {
   Certificate, 
   Language, 
   NotificationItem,
-  UserRole
+  UserRole,
+  StudentRecommendationBundle,
+  InternshipListing
 } from '../types';
 import { 
   SAMPLE_JOBS, 
@@ -26,15 +28,34 @@ import {
   deleteOpportunityApi,
   fetchNotificationsApi,
   markNotificationReadApi,
-  issueCertificateApi
+  issueCertificateApi,
+  fetchPersonalizedRecommendationsApi
 } from '../services/api';
 import {
   auth,
   onAuthStateChanged,
   getFirebaseCustomClaims,
   getSavedResumeFromFirestore,
+  getUserProfileFromFirestore,
+  saveStudentRecommendationsToFirestore,
+  getStudentRecommendationsFromFirestore,
+  getVerifiedInternshipsFromFirestore,
+  saveVerifiedInternshipToFirestore,
+  deleteVerifiedInternshipFromFirestore,
   signOutUser
 } from '../services/firebase';
+import {
+  computeProfileSignature,
+  suggestResourcesForMissingSkills
+} from '../services/matchingEngine';
+
+export interface RecommendationSourceStatus {
+  externalApiCount: number;
+  firestoreCount: number;
+  platformVerifiedCount: number;
+  externalUnavailable: boolean;
+  totalVerifiedCount: number;
+}
 
 interface AppContextType {
   user: UserProfile;
@@ -45,6 +66,9 @@ interface AppContextType {
   setActiveTab: (tab: string) => void;
   selectedJobForDetail: Job | null;
   setSelectedJobForDetail: (job: Job | null) => void;
+  openApplyModal: boolean;
+  setOpenApplyModal: (open: boolean) => void;
+  openJobApplyModal: (job: Job) => void;
   selectedCourseForPlayer: Course | null;
   setSelectedCourseForPlayer: (course: Course | null) => void;
   courses: Course[];
@@ -87,7 +111,16 @@ interface AppContextType {
   login: (token: string, user: UserProfile) => void;
   logout: () => void;
   refreshOpportunities: () => Promise<void>;
+  isLoadingOpportunities: boolean;
+  opportunitiesError: string | null;
+  firestoreInternshipsCount: number;
   refreshApplications: () => Promise<void>;
+  // AI Personalized Internship Matching State
+  recommendationsBundle: StudentRecommendationBundle | null;
+  isLoadingRecommendations: boolean;
+  recommendationsError: string | null;
+  recommendationSourceStatus: RecommendationSourceStatus | null;
+  refreshRecommendations: (force?: boolean) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -120,9 +153,18 @@ export const EMPTY_USER: UserProfile = {
   photoUrl: '',
   education: '',
   institution: '',
+  course: '',
+  branch: '',
+  studyYear: '',
   graduationYear: '',
   skills: [],
+  nonTechnicalSkills: [],
   interests: [],
+  preferredRoles: [],
+  preferredDomain: '',
+  careerGoals: '',
+  preferredLocation: '',
+  workModePreference: 'Any',
   location: 'India',
   coordinates: {
     lat: 28.6139,
@@ -140,11 +182,26 @@ export const EMPTY_USER: UserProfile = {
 
 export function normalizeUserProfile(rawUser: any): UserProfile {
   if (!rawUser) return EMPTY_USER;
+  const rawMode = rawUser.workModePreference;
+  const validMode: 'Online' | 'Offline' | 'Hybrid' | 'Any' =
+    rawMode === 'Online' || rawMode === 'Offline' || rawMode === 'Hybrid' || rawMode === 'Any'
+      ? rawMode
+      : 'Any';
+
   return {
     ...EMPTY_USER,
     ...rawUser,
+    course: rawUser.course || '',
+    branch: rawUser.branch || '',
+    studyYear: rawUser.studyYear || '',
     skills: Array.isArray(rawUser.skills) ? rawUser.skills : [],
+    nonTechnicalSkills: Array.isArray(rawUser.nonTechnicalSkills) ? rawUser.nonTechnicalSkills : [],
     interests: Array.isArray(rawUser.interests) ? rawUser.interests : [],
+    preferredRoles: Array.isArray(rawUser.preferredRoles) ? rawUser.preferredRoles : [],
+    preferredDomain: rawUser.preferredDomain || '',
+    careerGoals: rawUser.careerGoals || '',
+    preferredLocation: rawUser.preferredLocation || '',
+    workModePreference: validMode,
     enrolledCourses: Array.isArray(rawUser.enrolledCourses) ? rawUser.enrolledCourses : [],
     savedJobIds: Array.isArray(rawUser.savedJobIds) ? rawUser.savedJobIds : [],
     badges: Array.isArray(rawUser.badges) ? rawUser.badges : [],
@@ -154,6 +211,52 @@ export function normalizeUserProfile(rawUser: any): UserProfile {
     resumeFileName: rawUser.resumeFileName || '',
     resumeText: rawUser.resumeText || '',
     resumeUpdatedAt: rawUser.resumeUpdatedAt || '',
+  };
+}
+
+function mapFirestoreInternshipToJob(item: InternshipListing): Job {
+  const modeLower = String(item.workMode || '').toLowerCase();
+  const jobType: Job['type'] = modeLower === 'remote' ? 'remote' : 'internship';
+  const stipendText = String(item.stipend || '').trim();
+  const amountMatch = stipendText.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
+  const stipendAmount = amountMatch ? Math.round(parseFloat(amountMatch[1])) : 0;
+  const locationText = String(item.location || 'India').trim() || 'India';
+  const city = locationText.split(',')[0].trim() || 'India';
+
+  return {
+    id: item.id,
+    title: item.title,
+    company: item.companyName,
+    companyLogo:
+      item.companyLogo ||
+      `https://ui-avatars.com/api/?name=${encodeURIComponent(item.companyName || 'YM')}&background=FF7A00&color=fff`,
+    location: locationText,
+    city,
+    coordinates: { lat: 20.5937, lng: 78.9629 },
+    type: jobType,
+    category: item.category || (item.isGovernmentScheme ? 'Government' : 'Tech'),
+    stipend: stipendText,
+    stipendAmount,
+    duration: item.duration || 'Internship',
+    requiredSkills: Array.isArray(item.skills) ? item.skills : [],
+    eligibility: item.eligibility || undefined,
+    description: item.description || `${item.title} internship at ${item.companyName}.`,
+    responsibilities: [],
+    perks: [],
+    deadline: item.applicationDeadline || 'Active Opening',
+    applicantsCount: 0,
+    postedDate: (item.createdAt || new Date().toISOString()).split('T')[0],
+    isVerified: item.verifiedStatus === 'Verified',
+    verificationStatus: item.verifiedStatus === 'Verified' ? 'approved' : 'pending',
+    verificationEvidence: 'Verified Indian Internship (Firestore)',
+    opportunitySource:
+      item.sourceName && !item.sourceName.toLowerCase().includes('direct')
+        ? item.sourceName
+        : 'Firestore Verified',
+    originalUrl: item.applyUrl || undefined,
+    externalSourceUrl: item.applyUrl || item.sourceUrl || undefined,
+    dateVerified: (item.lastVerifiedAt || item.updatedAt || new Date().toISOString()).split('T')[0],
+    isGovernmentSponsored: Boolean(item.isGovernmentScheme),
   };
 }
 
@@ -177,7 +280,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [activeTab, setActiveTab] = useState<string>('home');
   const [selectedJobForDetail, setSelectedJobForDetail] = useState<Job | null>(null);
+  const [openApplyModal, setOpenApplyModal] = useState<boolean>(false);
   const [selectedCourseForPlayer, setSelectedCourseForPlayer] = useState<Course | null>(null);
+
+  const openJobApplyModal = (job: Job) => {
+    setOpenApplyModal(true);
+    setSelectedJobForDetail(job);
+  };
   
   const [jobs, setJobs] = useState<Job[]>(() => {
     try {
@@ -253,16 +362,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  // Load live opportunities from backend (reads data.jobs)
+  // Opportunities & AI Personalized Internship Matching state
+  const [isLoadingOpportunities, setIsLoadingOpportunities] = useState<boolean>(false);
+  const [opportunitiesError, setOpportunitiesError] = useState<string | null>(null);
+  const [firestoreInternshipsCount, setFirestoreInternshipsCount] = useState<number>(0);
+  const [recommendationsBundle, setRecommendationsBundle] = useState<StudentRecommendationBundle | null>(null);
+  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState<boolean>(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [recommendationSourceStatus, setRecommendationSourceStatus] = useState<RecommendationSourceStatus | null>(null);
+
+  // Load live opportunities from backend + verified Indian internships from Firestore
   const refreshOpportunities = async () => {
+    setIsLoadingOpportunities(true);
+    setOpportunitiesError(null);
     try {
-      const data = await fetchOpportunitiesApi({ showAll: isAdmin || isRecruiter || isCollege });
-      const fetchedList = Array.isArray(data?.jobs) ? data.jobs : data?.opportunities;
-      if (Array.isArray(fetchedList) && fetchedList.length > 0) {
-        setJobs(fetchedList);
+      const [apiResult, firestoreResult] = await Promise.allSettled([
+        fetchOpportunitiesApi({ showAll: isAdmin || isRecruiter || isCollege }),
+        auth.currentUser ? getVerifiedInternshipsFromFirestore() : Promise.resolve([] as InternshipListing[]),
+      ]);
+
+      const backendJobs: Job[] =
+        apiResult.status === 'fulfilled'
+          ? (Array.isArray(apiResult.value?.jobs)
+              ? apiResult.value.jobs
+              : Array.isArray(apiResult.value?.opportunities)
+              ? apiResult.value.opportunities
+              : [])
+          : [];
+
+      const fsListings: InternshipListing[] =
+        firestoreResult.status === 'fulfilled' && Array.isArray(firestoreResult.value)
+          ? firestoreResult.value
+          : [];
+      setFirestoreInternshipsCount(fsListings.length);
+
+      const fsMappedJobs = fsListings.map(mapFirestoreInternshipToJob);
+      const merged: Job[] = [];
+      const seenKeys = new Set<string>();
+
+      for (const j of [...fsMappedJobs, ...backendJobs]) {
+        const key = `${j.id}::${(j.title || '').toLowerCase().trim()}::${(j.company || '').toLowerCase().trim()}`;
+        const titleCompanyKey = `${(j.title || '').toLowerCase().trim()}::${(j.company || '').toLowerCase().trim()}`;
+        if (seenKeys.has(j.id) || seenKeys.has(key) || seenKeys.has(titleCompanyKey)) {
+          continue;
+        }
+        seenKeys.add(j.id);
+        seenKeys.add(key);
+        seenKeys.add(titleCompanyKey);
+        merged.push(j);
       }
-    } catch (err) {
+
+      if (apiResult.status === 'rejected') {
+        const errMsg = (apiResult.reason as any)?.message || 'Unable to fetch live opportunities from server.';
+        setOpportunitiesError(errMsg);
+        if (merged.length > 0) {
+          setJobs(merged);
+        }
+      } else {
+        setJobs(merged);
+      }
+    } catch (err: any) {
       console.warn('Backend opportunities fetch failed:', err);
+      setOpportunitiesError(err?.message || 'Unable to load opportunities right now.');
+    } finally {
+      setIsLoadingOpportunities(false);
     }
   };
 
@@ -411,6 +574,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(EMPTY_USER);
     setApplications([]);
     setNotifications([]);
+    setRecommendationsBundle(null);
+    setRecommendationsError(null);
+    setRecommendationSourceStatus(null);
+    setOpenApplyModal(false);
     setHasVerifiedAdminClaim(false);
     localStorage.removeItem('ym_auth_token');
     localStorage.removeItem('ym_user');
@@ -421,7 +588,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Monitor Firebase Auth custom claims & hydrate persisted Firestore resume (users/{uid}/resume/current) on refresh
+  // Monitor Firebase Auth custom claims & hydrate persisted Firestore profile, resume, and private recommendations on refresh
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
@@ -437,22 +604,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         try {
-          const savedResume = await getSavedResumeFromFirestore(fbUser.uid);
-          if (savedResume) {
-            setUser((prev) => {
-              const prevEmail = (prev.email || '').toLowerCase();
-              const fbEmail = (fbUser.email || '').toLowerCase();
-              if (prev.id && prevEmail && fbEmail && prevEmail !== fbEmail) {
-                return prev;
+          const [savedResume, fsProfile, cachedRecs] = await Promise.all([
+            getSavedResumeFromFirestore(fbUser.uid).catch(() => null),
+            getUserProfileFromFirestore(fbUser.uid).catch(() => null),
+            getStudentRecommendationsFromFirestore(fbUser.uid).catch(() => null),
+          ]);
+
+          let nextNormalizedUser: UserProfile | null = null;
+          setUser((prev) => {
+            const prevEmail = (prev.email || '').toLowerCase();
+            const fbEmail = (fbUser.email || '').toLowerCase();
+            if (prev.id && prevEmail && fbEmail && prevEmail !== fbEmail) {
+              return prev;
+            }
+            const mergedFromFs: Partial<UserProfile> = {};
+            if (fsProfile) {
+              const scalarKeys: Array<keyof UserProfile> = [
+                'name', 'phone', 'education', 'institution', 'college', 'course',
+                'branch', 'studyYear', 'rollNumber', 'cgpa', 'graduationYear',
+                'location', 'preferredLocation', 'preferredDomain', 'careerGoals',
+                'workModePreference', 'githubUrl', 'linkedinUrl', 'portfolioUrl', 'photoUrl'
+              ];
+              for (const k of scalarKeys) {
+                if (fsProfile[k]) {
+                  (mergedFromFs as any)[k] = fsProfile[k];
+                }
               }
-              return normalizeUserProfile({
-                ...prev,
+              if (typeof fsProfile.age === 'number') mergedFromFs.age = fsProfile.age;
+              const arrKeys: Array<keyof UserProfile> = ['skills', 'nonTechnicalSkills', 'interests', 'preferredRoles', 'savedJobIds', 'badges'];
+              for (const k of arrKeys) {
+                if (Array.isArray(fsProfile[k]) && fsProfile[k].length > 0) {
+                  (mergedFromFs as any)[k] = fsProfile[k];
+                }
+              }
+            }
+            nextNormalizedUser = normalizeUserProfile({
+              ...prev,
+              ...mergedFromFs,
+              ...(savedResume ? {
                 resumeFileName: savedResume.fileName,
                 resumeText: savedResume.text,
                 resumeUpdatedAt: savedResume.updatedAt,
-              });
+              } : {}),
             });
+            return nextNormalizedUser;
+          });
+
+          if (cachedRecs && Array.isArray(cachedRecs.recommendations) && cachedRecs.recommendations.length > 0) {
+            const targetUser = nextNormalizedUser || user;
+            const currentSig = computeProfileSignature(targetUser);
+            if (cachedRecs.profileSignature === currentSig) {
+              const missing = Array.isArray(cachedRecs.overallMissingSkills) ? cachedRecs.overallMissingSkills : [];
+              setRecommendationsBundle({
+                userId: fbUser.uid,
+                profileSignature: cachedRecs.profileSignature,
+                recommendations: cachedRecs.recommendations,
+                overallMissingSkills: missing,
+                topSkillGapResources: suggestResourcesForMissingSkills(
+                  missing,
+                  cachedRecs.recommendations[0]?.title
+                ),
+                beginnerFriendlyCount: cachedRecs.recommendations.filter((r: any) => r.isBeginnerFriendly).length,
+                updatedAt: cachedRecs.updatedAt || new Date().toISOString(),
+              });
+            }
           }
+
+          // Hydrate verified Indian internships stored in Firestore once Firebase Auth is ready
+          void refreshOpportunities();
         } catch {
           // Non-fatal if offline; localStorage still serves cached profile
         }
@@ -462,6 +681,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     return () => unsub();
   }, []);
+
+  const recommendationsInFlightSigRef = React.useRef<string | null>(null);
+
+  const refreshRecommendations = async (force: boolean = false) => {
+    const currentSig = computeProfileSignature(user);
+    if (
+      !force &&
+      recommendationsBundle?.profileSignature === currentSig &&
+      recommendationsBundle.recommendations.length > 0
+    ) {
+      return;
+    }
+    if (!force && recommendationsInFlightSigRef.current === currentSig) {
+      return;
+    }
+
+    recommendationsInFlightSigRef.current = currentSig;
+    setIsLoadingRecommendations(true);
+    setRecommendationsError(null);
+
+    try {
+      const firestoreInternships = auth.currentUser
+        ? await getVerifiedInternshipsFromFirestore().catch(() => [])
+        : [];
+
+      const res = await fetchPersonalizedRecommendationsApi(user, 8, firestoreInternships);
+      const recs = Array.isArray(res?.recommendations) ? res.recommendations : [];
+      const overallMissingSkills = Array.isArray(res?.overallMissingSkills) ? res.overallMissingSkills : [];
+      const topSkillGapResources = Array.isArray(res?.topSkillGapResources)
+        ? res.topSkillGapResources
+        : suggestResourcesForMissingSkills(overallMissingSkills, recs[0]?.title);
+
+      const bundle: StudentRecommendationBundle = {
+        userId: auth.currentUser?.uid || user.id || 'guest',
+        profileSignature: res?.profileSignature || currentSig,
+        recommendations: recs,
+        overallMissingSkills,
+        topSkillGapResources,
+        beginnerFriendlyCount:
+          typeof res?.beginnerFriendlyCount === 'number'
+            ? res.beginnerFriendlyCount
+            : recs.filter((r: any) => r.isBeginnerFriendly).length,
+        updatedAt: res?.updatedAt || new Date().toISOString(),
+      };
+
+      setRecommendationsBundle(bundle);
+      if (res?.sourceStatus) {
+        setRecommendationSourceStatus(res.sourceStatus);
+      }
+
+      if (auth.currentUser?.uid) {
+        saveStudentRecommendationsToFirestore(auth.currentUser.uid, bundle).catch(() => {});
+      }
+    } catch (err: any) {
+      setRecommendationsError(err?.message || 'Unable to compute personalized internship matches right now.');
+    } finally {
+      if (recommendationsInFlightSigRef.current === currentSig) {
+        recommendationsInFlightSigRef.current = null;
+      }
+      setIsLoadingRecommendations(false);
+    }
+  };
+
+  // Automatically analyze student profile & recompute matches on load and whenever profile changes
+  const profileSignature = computeProfileSignature(user);
+  useEffect(() => {
+    if (user.role !== 'student' && user.role !== 'experienced') {
+      return;
+    }
+    const timer = setTimeout(() => {
+      void refreshRecommendations(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [profileSignature, user.role]);
 
   // Restore session token on load
   useEffect(() => {
@@ -623,6 +916,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!createdJob) {
       throw new Error(res?.error || 'Backend did not return created opportunity.');
     }
+
+    // Store verified Indian internships in Firebase Firestore (/internships) when signed in with write privileges
+    if (
+      auth.currentUser &&
+      (isAdmin || isRecruiter || isCollege) &&
+      (createdJob.type === 'internship' || jobData.opportunitySource === 'Firestore Verified')
+    ) {
+      const nowIso = new Date().toISOString();
+      const applyHref = createdJob.originalUrl || createdJob.externalSourceUrl || `https://yuvamitraa.in/internships/${createdJob.id}`;
+      const fsListing: InternshipListing = {
+        id: createdJob.id,
+        title: createdJob.title,
+        companyName: createdJob.company,
+        companyLogo: createdJob.companyLogo,
+        category: createdJob.category,
+        description: createdJob.description || '',
+        eligibility: createdJob.eligibility || 'Indian college students & freshers',
+        skills: Array.isArray(createdJob.requiredSkills) ? createdJob.requiredSkills : [],
+        location: createdJob.location || 'India',
+        workMode: createdJob.type === 'remote' ? 'Remote' : 'On-site',
+        duration: createdJob.duration || 'Internship',
+        stipend: createdJob.stipend || '',
+        applicationDeadline: createdJob.deadline || '',
+        applyUrl: applyHref,
+        sourceName: createdJob.opportunitySource || 'Firestore Verified',
+        sourceUrl: applyHref,
+        sourceId: createdJob.id,
+        verifiedStatus: 'Verified',
+        lastVerifiedAt: nowIso,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        isGovernmentScheme: Boolean(createdJob.isGovernmentSponsored),
+      };
+      const saved = await saveVerifiedInternshipToFirestore(fsListing).catch(() => false);
+      if (saved) {
+        setFirestoreInternshipsCount((prev) => prev + 1);
+      }
+    }
+
     setJobs(prev => [createdJob, ...prev]);
     return true;
   };
@@ -639,7 +971,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!authToken) {
       throw new Error('Authentication required to delete an opportunity.');
     }
-    await deleteOpportunityApi(authToken, jobId);
+    let backendDeleted = false;
+    try {
+      await deleteOpportunityApi(authToken, jobId);
+      backendDeleted = true;
+    } catch (err) {
+      if (!auth.currentUser || (!isAdmin && !isRecruiter && !isCollege)) {
+        throw err;
+      }
+    }
+
+    let firestoreDeleted = false;
+    if (auth.currentUser && (isAdmin || isRecruiter || isCollege)) {
+      firestoreDeleted = await deleteVerifiedInternshipFromFirestore(jobId).catch(() => false);
+      if (firestoreDeleted) {
+        setFirestoreInternshipsCount((prev) => Math.max(0, prev - 1));
+      }
+    }
+
+    if (!backendDeleted && !firestoreDeleted) {
+      throw new Error('Failed to delete opportunity from server and Firestore.');
+    }
     setJobs(prev => prev.filter(job => job.id !== jobId));
   };
 
@@ -715,6 +1067,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         selectedJobForDetail,
         setSelectedJobForDetail,
+        openApplyModal,
+        setOpenApplyModal,
+        openJobApplyModal,
         selectedCourseForPlayer,
         setSelectedCourseForPlayer,
         courses: SAMPLE_COURSES,
@@ -755,7 +1110,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         logout,
         refreshOpportunities,
+        isLoadingOpportunities,
+        opportunitiesError,
+        firestoreInternshipsCount,
         refreshApplications,
+        recommendationsBundle,
+        isLoadingRecommendations,
+        recommendationsError,
+        recommendationSourceStatus,
+        refreshRecommendations,
       }}
     >
       {children}

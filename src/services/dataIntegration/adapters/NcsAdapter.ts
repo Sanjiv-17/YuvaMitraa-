@@ -1,5 +1,10 @@
 import { IDataSourceAdapter, AdapterSyncResult } from '../types';
 import { JobListing, SourceAdapterInfo } from '../../../types';
+import {
+  formatCredentialConfigMessage,
+  isValidHttpEndpoint,
+  validateHeaderCredential,
+} from '../credentialUtils';
 
 /**
  * National Career Service (NCS) Portal Adapter
@@ -20,16 +25,16 @@ export class NcsPortalAdapter implements IDataSourceAdapter {
   readonly documentationUrl = 'https://www.ncs.gov.in/Pages/AboutUs.aspx';
   readonly description = 'National Career Service (NCS) is a Five Year Plan project by Ministry of Labour & Employment, Government of India, bridging jobseekers and employers.';
 
-  private apiKey: string;
-  private endpoint: string;
+  private get apiKey(): string {
+    return (process.env.NCS_API_KEY || '').trim();
+  }
 
-  constructor() {
-    this.apiKey = process.env.NCS_API_KEY || '';
-    this.endpoint = process.env.NCS_API_ENDPOINT || 'https://www.ncs.gov.in/api/v1/vacancies';
+  private get endpoint(): string {
+    return (process.env.NCS_API_ENDPOINT || 'https://www.ncs.gov.in/api/v1/vacancies').trim();
   }
 
   isConfigured(): boolean {
-    return Boolean(this.apiKey && this.apiKey.trim().length > 0);
+    return validateHeaderCredential(this.apiKey).valid && isValidHttpEndpoint(this.endpoint);
   }
 
   getInfo(totalListings = 0, lastSyncAt = new Date().toISOString()): SourceAdapterInfo {
@@ -52,9 +57,10 @@ export class NcsPortalAdapter implements IDataSourceAdapter {
 
   async fetchAndNormalize(): Promise<AdapterSyncResult> {
     const now = new Date().toISOString();
+    const keyValidation = validateHeaderCredential(this.apiKey);
 
-    // If NCS_API_KEY is not configured, skip this source gracefully
-    if (!this.isConfigured()) {
+    // If NCS_API_KEY is not valid/configured, skip this source gracefully
+    if (!keyValidation.valid) {
       return {
         sourceName: this.name,
         sourceId: this.id,
@@ -64,7 +70,26 @@ export class NcsPortalAdapter implements IDataSourceAdapter {
         updatedCount: 0,
         duplicateCount: 0,
         expiredCount: 0,
-        errorMessage: 'NCS_API_KEY is an optional credential and not currently configured. Source skipped until authorized government credentials are provided. Official portal link: https://www.ncs.gov.in/',
+        errorMessage: formatCredentialConfigMessage(
+          'NCS_API_KEY',
+          keyValidation,
+          this.officialPortalUrl
+        ),
+        jobs: [],
+      };
+    }
+
+    if (!isValidHttpEndpoint(this.endpoint)) {
+      return {
+        sourceName: this.name,
+        sourceId: this.id,
+        status: 'CONFIG_REQUIRED',
+        fetchedCount: 0,
+        insertedCount: 0,
+        updatedCount: 0,
+        duplicateCount: 0,
+        expiredCount: 0,
+        errorMessage: `NCS_API_ENDPOINT is invalid. Official portal link: ${this.officialPortalUrl}`,
         jobs: [],
       };
     }
@@ -74,7 +99,7 @@ export class NcsPortalAdapter implements IDataSourceAdapter {
       const response = await fetch(this.endpoint, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
+          'Authorization': `Bearer ${keyValidation.sanitized}`,
           'Accept': 'application/json',
           'User-Agent': 'YuvaMitraa-NCS-Partner/1.0',
         },
@@ -137,17 +162,21 @@ export class NcsPortalAdapter implements IDataSourceAdapter {
         jobs: normalized,
       };
     } catch (err: any) {
-      console.warn(`[NCS Adapter] Authorized API call error: ${err.message}. Source skipped.`);
+      const message = err?.message || 'Unknown connection error';
+      const isCredentialFormatErr = /ByteString/i.test(message);
+      console.info(`[NCS Adapter] Authorized API call skipped/failed: ${message}`);
       return {
         sourceName: this.name,
         sourceId: this.id,
-        status: 'FAILED',
+        status: isCredentialFormatErr ? 'CONFIG_REQUIRED' : 'FAILED',
         fetchedCount: 0,
         insertedCount: 0,
         updatedCount: 0,
         duplicateCount: 0,
         expiredCount: 0,
-        errorMessage: `NCS authorized endpoint connection failed: ${err.message}`,
+        errorMessage: isCredentialFormatErr
+          ? `NCS_API_KEY contains characters incompatible with HTTP headers. Verify .env values.`
+          : `NCS authorized endpoint connection failed: ${message}`,
         jobs: [],
       };
     }

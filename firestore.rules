@@ -52,7 +52,8 @@ service cloud.firestore {
           'course', 'studyYear', 'department', 'branch', 'rollNumber', 'cgpa', 'graduationYear',
           'collegeAisheCode', 'collegeWebsite', 'accreditation', 'companyName', 'designation',
           'industry', 'companyWebsite', 'cinOrRegistrationNumber', 'currentRole', 'yearsOfExperience',
-          'location', 'age', 'skills', 'interests', 'preferredRoles', 'githubUrl', 'linkedinUrl',
+          'location', 'preferredLocation', 'workModePreference', 'age', 'skills', 'nonTechnicalSkills',
+          'interests', 'preferredRoles', 'preferredDomain', 'careerGoals', 'githubUrl', 'linkedinUrl',
           'portfolioUrl', 'resumeFileName', 'resumeUpdatedAt', 'photoUrl', 'streakDays', 'xpPoints', 'badges',
           'savedJobIds', 'enrolledCourses', 'createdAt', 'updatedAt'
         ]) &&
@@ -82,6 +83,10 @@ service cloud.firestore {
         isValidStringOpt(data, 'currentRole', 160) &&
         isValidStringOpt(data, 'yearsOfExperience', 64) &&
         isValidStringOpt(data, 'location', 160) &&
+        isValidStringOpt(data, 'preferredLocation', 160) &&
+        (!('workModePreference' in data) || data.workModePreference in ['Online', 'Offline', 'Hybrid', 'Any']) &&
+        isValidStringOpt(data, 'preferredDomain', 160) &&
+        isValidStringOpt(data, 'careerGoals', 500) &&
         isValidStringOpt(data, 'githubUrl', 300) &&
         isValidStringOpt(data, 'linkedinUrl', 300) &&
         isValidStringOpt(data, 'portfolioUrl', 300) &&
@@ -94,6 +99,7 @@ service cloud.firestore {
         (!('streakDays' in data) || (data.streakDays is number && data.streakDays >= 0 && data.streakDays <= 10000)) &&
         (!('xpPoints' in data) || (data.xpPoints is number && data.xpPoints >= 0 && data.xpPoints <= 10000000)) &&
         isValidStringListOpt(data, 'skills', 60) &&
+        isValidStringListOpt(data, 'nonTechnicalSkills', 40) &&
         isValidStringListOpt(data, 'interests', 40) &&
         isValidStringListOpt(data, 'preferredRoles', 30) &&
         isValidStringListOpt(data, 'badges', 50) &&
@@ -136,6 +142,16 @@ service cloud.firestore {
         data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64;
     }
 
+    function isValidSavedRecommendations(data, userId) {
+      return data.keys().hasAll(['userId', 'profileSignature', 'recommendations', 'updatedAt']) &&
+        data.keys().hasOnly(['userId', 'profileSignature', 'recommendations', 'overallMissingSkills', 'updatedAt']) &&
+        data.userId is string && data.userId == userId &&
+        data.profileSignature is string && data.profileSignature.size() <= 256 &&
+        data.recommendations is list && data.recommendations.size() <= 25 &&
+        isValidStringListOpt(data, 'overallMissingSkills', 30) &&
+        data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64;
+    }
+
     // User profiles - private PII isolation; users cannot select admin on signup or edit their own role field
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
@@ -167,6 +183,16 @@ service cloud.firestore {
           resumeDocId == 'current' &&
           isValidSavedResume(request.resource.data);
         allow delete: if (isOwner(userId) || isAdmin()) && resumeDocId == 'current';
+      }
+
+      // Private personalized AI internship recommendations at users/{uid}/recommendations/current
+      match /recommendations/{recDocId} {
+        allow get: if (isOwner(userId) || isAdmin()) && recDocId == 'current';
+        allow list: if false;
+        allow create, update: if isOwner(userId) &&
+          recDocId == 'current' &&
+          isValidSavedRecommendations(request.resource.data, userId);
+        allow delete: if (isOwner(userId) || isAdmin()) && recDocId == 'current';
       }
     }
 

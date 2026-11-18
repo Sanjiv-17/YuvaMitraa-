@@ -22,6 +22,8 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { 
+  loginApi,
+  registerDirectApi,
   sendPasswordResetLinkApi,
   firebaseLoginApi,
   verifyAdminClaimApi
@@ -252,9 +254,9 @@ export const LoginScreen: React.FC = () => {
     } else if (code === 'auth/popup-closed-by-user') {
       message = 'Google sign-in popup was closed before completing authentication.';
       solution = 'Please click "Continue with Google" again and complete the account selection.';
-    } else if (code === 'auth/configuration-not-found') {
-      message = 'Google Sign-In provider is not enabled in Firebase Console for this project.';
-      solution = 'You can sign in directly using your registered Email & Password.';
+    } else if (code === 'auth/configuration-not-found' || code === 'auth/operation-not-allowed') {
+      message = 'Email/Password sign-in via Firebase is not enabled in this project.';
+      solution = 'Please try signing in with Google, or verify your email and password credentials.';
     } else if (code === 'auth/unauthorized-domain') {
       message = 'This preview domain is not listed in your Firebase Authorized Domains.';
       solution = 'Add this domain to Firebase Console > Authentication > Settings > Authorized domains.';
@@ -291,11 +293,34 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const credential = await loginWithEmailPassword(email, pass);
-      if (!credential.user) {
-        throw new Error('Authentication failed. Please try again.');
+      try {
+        const credential = await loginWithEmailPassword(email, pass);
+        if (!credential.user) {
+          throw new Error('Authentication failed. Please try again.');
+        }
+        await completePostAuthLogin(credential.user);
+      } catch (fbErr: any) {
+        const fbCode = fbErr?.code || '';
+        const shouldFallbackToBackend =
+          fbCode === 'auth/operation-not-allowed' ||
+          fbCode === 'auth/configuration-not-found' ||
+          fbCode === 'auth/user-not-found' ||
+          fbCode === 'auth/invalid-credential';
+
+        if (!shouldFallbackToBackend) {
+          throw fbErr;
+        }
+
+        try {
+          const backendRes = await loginApi(email, pass, rememberMe);
+          login(backendRes.token, backendRes.user);
+        } catch (backendErr: any) {
+          if (fbCode === 'auth/operation-not-allowed' || fbCode === 'auth/configuration-not-found') {
+            throw backendErr;
+          }
+          throw fbErr;
+        }
       }
-      await completePostAuthLogin(credential.user);
     } catch (err: any) {
       handleAuthError(err, 'Email & Password Login');
     } finally {
@@ -365,49 +390,71 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const credential = await registerWithEmailPassword(name, email, pass);
-      const fbUser = credential.user;
-      if (!fbUser) {
-        throw new Error('Failed to create Firebase user.');
+      try {
+        const credential = await registerWithEmailPassword(name, email, pass);
+        const fbUser = credential.user;
+        if (!fbUser) {
+          throw new Error('Failed to create Firebase user.');
+        }
+
+        // Send email verification link (non-blocking if SMTP/Firebase rate-limited)
+        sendVerificationEmail(fbUser).catch(() => {});
+
+        const createdAt = new Date().toISOString();
+        const idToken = await fbUser.getIdToken(false);
+
+        // Save chosen role in Firestore & authenticate backend session concurrently
+        const [, backendRes] = await Promise.all([
+          syncUserProfileToFirestore(fbUser.uid, {
+            name,
+            email,
+            role: regRole,
+            createdAt,
+            currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+            yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+          }, { isNewUser: true }),
+          firebaseLoginApi({
+            firebaseUid: fbUser.uid,
+            idToken,
+            email,
+            name,
+            role: regRole,
+            currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+            yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+          }),
+        ]);
+
+        login(backendRes.token, {
+          ...backendRes.user,
+          role: regRole,
+          name,
+          email,
+          companyName: regRole === 'recruiter' ? regCompanyName.trim() : undefined,
+          cinOrRegistrationNumber: regRole === 'recruiter' ? regCinNumber.trim() : undefined,
+          currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+          yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+        });
+      } catch (fbErr: any) {
+        const fbCode = fbErr?.code || '';
+        if (fbCode !== 'auth/operation-not-allowed' && fbCode !== 'auth/configuration-not-found') {
+          throw fbErr;
+        }
+
+        // Fallback to backend PBKDF2 registration when Email/Password is disabled in Firebase Console
+        const regRes = await registerDirectApi({
+          name,
+          email,
+          password: pass,
+          confirmPassword: confirmPass,
+          role: regRole,
+          companyName: regRole === 'recruiter' ? regCompanyName.trim() : undefined,
+          cinOrRegistrationNumber: regRole === 'recruiter' ? regCinNumber.trim() : undefined,
+          currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
+          yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
+        });
+
+        login(regRes.token, regRes.user);
       }
-
-      // Send email verification link (non-blocking if SMTP/Firebase rate-limited)
-      sendVerificationEmail(fbUser).catch(() => {});
-
-      const createdAt = new Date().toISOString();
-      const idToken = await fbUser.getIdToken(false);
-
-      // Save chosen role in Firestore & authenticate backend session concurrently
-      const [, backendRes] = await Promise.all([
-        syncUserProfileToFirestore(fbUser.uid, {
-          name,
-          email,
-          role: regRole,
-          createdAt,
-          currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
-          yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
-        }, { isNewUser: true }),
-        firebaseLoginApi({
-          firebaseUid: fbUser.uid,
-          idToken,
-          email,
-          name,
-          role: regRole,
-          currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
-          yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
-        }),
-      ]);
-
-      login(backendRes.token, {
-        ...backendRes.user,
-        role: regRole,
-        name,
-        email,
-        companyName: regRole === 'recruiter' ? regCompanyName.trim() : undefined,
-        cinOrRegistrationNumber: regRole === 'recruiter' ? regCinNumber.trim() : undefined,
-        currentRole: regRole === 'experienced' ? regCurrentRole.trim() : undefined,
-        yearsOfExperience: regRole === 'experienced' ? regYearsExperience.trim() : undefined,
-      });
     } catch (err: any) {
       handleAuthError(err, 'Registration');
     } finally {
@@ -433,8 +480,17 @@ export const LoginScreen: React.FC = () => {
     setIsLoading(true);
 
     try {
-      void sendPasswordResetLinkApi(email).catch(() => {});
-      await sendFirebasePasswordResetEmail(email);
+      try {
+        await sendFirebasePasswordResetEmail(email);
+        void sendPasswordResetLinkApi(email).catch(() => {});
+      } catch (fbErr: any) {
+        const fbCode = fbErr?.code || '';
+        if (fbCode === 'auth/operation-not-allowed' || fbCode === 'auth/configuration-not-found') {
+          await sendPasswordResetLinkApi(email);
+        } else {
+          throw fbErr;
+        }
+      }
       setSuccessMessage('Reset link sent. Check your inbox and spam folder.');
     } catch (err: any) {
       handleAuthError(err, 'Forgot Password');

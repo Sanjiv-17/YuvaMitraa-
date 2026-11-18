@@ -49,6 +49,7 @@ import {
   toggleIntegrationSourceApi
 } from '../../services/api';
 import { UserProfile, AuditLogItem, Job, VerificationRequestItem, SourceAdapterInfo, DataSyncLog } from '../../types';
+import { parseCompensationAmount } from '../../services/dataIntegration/textUtils';
 
 export const AdminDashboard: React.FC = () => {
   const { 
@@ -58,6 +59,7 @@ export const AdminDashboard: React.FC = () => {
     jobs, 
     addJob, 
     deleteJob, 
+    firestoreInternshipsCount,
     courses, 
     applications, 
     updateApplicationStatus 
@@ -103,6 +105,7 @@ export const AdminDashboard: React.FC = () => {
   const [newJobStipend, setNewJobStipend] = useState('₹18,000 / month');
   const [newJobDuration, setNewJobDuration] = useState('3 Months');
   const [newJobSkills, setNewJobSkills] = useState('Python, SQL, Problem Solving');
+  const [newJobApplyUrl, setNewJobApplyUrl] = useState('');
   const [newJobDesc, setNewJobDesc] = useState('');
 
   const loadData = async () => {
@@ -229,36 +232,49 @@ export const AdminDashboard: React.FC = () => {
 
     try {
       const publishedTitle = newJobTitle.trim();
+      const applyHref = newJobApplyUrl.trim();
+      const parsedAmount = parseCompensationAmount(newJobStipend);
+
       await addJob({
         title: publishedTitle,
         company: newJobCompany.trim(),
-        companyLogo: 'https://images.unsplash.com/photo-1549923746-c502d488b3ea?auto=format&fit=crop&w=150&q=80',
-        location: newJobLocation.trim(),
-        city: newJobLocation.split(',')[0].trim(),
+        companyLogo: `https://ui-avatars.com/api/?name=${encodeURIComponent(newJobCompany.trim())}&background=FF7A00&color=fff`,
+        location: newJobLocation.trim() || 'India',
+        city: (newJobLocation.split(',')[0] || 'India').trim(),
         coordinates: { lat: 12.9716, lng: 77.5946 },
         type: newJobType,
         category: newJobCategory,
         stipend: newJobStipend.trim(),
-        stipendAmount: 18000,
-        duration: newJobDuration.trim(),
+        stipendAmount: parsedAmount,
+        duration: newJobDuration.trim() || 'Internship',
         requiredSkills: newJobSkills.split(',').map(s => s.trim()).filter(Boolean),
-        description: newJobDesc.trim() || 'Work with senior engineers on live products and scalable systems.',
-        responsibilities: ['Assist in feature development', 'Participate in team agile sprints'],
-        perks: ['Certificate of Completion', 'Pre-Placement Offer (PPO)', 'Mentorship'],
+        description: newJobDesc.trim() || `${publishedTitle} opportunity at ${newJobCompany.trim()}.`,
+        responsibilities: [],
+        perks: [],
         deadline: '2026-12-31',
         isGovernmentSponsored: newJobCategory === 'Government',
         isVerified: true,
         verificationStatus: 'approved',
-        verificationEvidence: 'Admin Verified Institutional Listing',
-        opportunitySource: newJobCategory === 'Government' ? 'National Career Service (NCS)' : 'Direct Employer',
+        verificationEvidence:
+          newJobType === 'internship'
+            ? 'Verified Indian Internship (Firestore)'
+            : 'Admin Verified Institutional Listing',
+        opportunitySource:
+          newJobCategory === 'Government'
+            ? 'National Career Service (NCS)'
+            : newJobType === 'internship'
+            ? 'Firestore Verified'
+            : 'Direct Employer',
+        ...(applyHref ? { originalUrl: applyHref, externalSourceUrl: applyHref } : {}),
         creatorId: user.id,
         creatorRole: 'admin'
       });
 
-      setStatusMsg(`New internship "${publishedTitle}" successfully published.`);
+      setStatusMsg(`New verified listing "${publishedTitle}" published and synced.`);
       setShowAddJobModal(false);
       setNewJobTitle('');
       setNewJobCompany('');
+      setNewJobApplyUrl('');
       setNewJobDesc('');
       setTimeout(() => setStatusMsg(null), 3000);
     } catch (err: any) {
@@ -538,7 +554,7 @@ export const AdminDashboard: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-500">
-                Automated multi-source connector for AICTE National Portal, IndianAPI Jobs feed, and National Career Service. Zero fake listings allowed.
+                Multi-source connector for free public APIs (Arbeitnow &amp; Remotive) plus optional AICTE, IndianAPI &amp; NCS connectors. Zero fake listings allowed.
               </p>
             </div>
 
@@ -627,27 +643,49 @@ export const AdminDashboard: React.FC = () => {
 
                     {/* Environment Variable & Connection Details */}
                     <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-100 dark:border-slate-700/60 space-y-1.5 text-[11px]">
-                      <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-                        <span>Required Env Key:</span>
-                        <code className="font-mono text-[10px] font-bold text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-800 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700">
-                          {source.id === 'aicte_portal'
-                            ? 'AICTE_API_KEY & CLIENT_ID'
-                            : source.id === 'indianapi_jobs'
-                            ? 'INDIANAPI_KEY'
-                            : 'NCS_API_KEY'}
-                        </code>
-                      </div>
-                      <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
-                        <span>Key Configured:</span>
-                        <span className={`font-bold ${source.isKeyConfigured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
-                          {source.isKeyConfigured ? 'Yes (Active)' : 'Optional (Not Configured)'}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/50 dark:border-slate-700/50">
-                        {source.isKeyConfigured
-                          ? 'Syncs authorized real-world listings every 6 hours.'
-                          : 'Skipped during 6-hour refresh without errors or fake data.'}
-                      </div>
+                      {!source.requiresKey ? (
+                        <>
+                          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                            <span>Access Mode:</span>
+                            <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                              Free Public API (Zero Key)
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                            <span>Terms &amp; Attribution:</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">
+                              {source.id === 'remotive_jobs' ? 'Direct URL + Cooldown Guard' : 'Direct Source Link'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/50 dark:border-slate-700/50">
+                            No paid subscription or API key required. Rate limits and HTML sanitization enforced.
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                            <span>Required Env Key:</span>
+                            <code className="font-mono text-[10px] font-bold text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-800 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                              {source.id === 'aicte_portal'
+                                ? 'AICTE_API_KEY & CLIENT_ID'
+                                : source.id === 'indianapi_jobs'
+                                ? 'INDIANAPI_KEY'
+                                : 'NCS_API_KEY'}
+                            </code>
+                          </div>
+                          <div className="flex items-center justify-between text-slate-600 dark:text-slate-400">
+                            <span>Key Configured:</span>
+                            <span className={`font-bold ${source.isKeyConfigured ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                              {source.isKeyConfigured ? 'Yes (Active)' : 'Optional (Not Configured)'}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-slate-500 dark:text-slate-400 pt-1 border-t border-slate-200/50 dark:border-slate-700/50">
+                            {source.isKeyConfigured
+                              ? 'Syncs authorized real-world listings every 6 hours.'
+                              : 'Skipped during 6-hour refresh without errors or fake data.'}
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     <div className="pt-2 border-t border-slate-100 dark:border-slate-700 space-y-1 text-[11px] text-slate-500">
@@ -983,11 +1021,14 @@ export const AdminDashboard: React.FC = () => {
         <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4 animate-in fade-in">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-700 pb-3">
             <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                Internship Listings & Partner Posts ({jobs.length})
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex flex-wrap items-center gap-2">
+                <span>Internship Listings &amp; Partner Posts ({jobs.length})</span>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  Firestore Verified Indian: {firestoreInternshipsCount}
+                </span>
               </h3>
               <p className="text-xs text-slate-500">
-                Directly verify, add or delete corporate openings listed on YuvaMitraa
+                Manage verified Indian internships stored in Firebase Firestore alongside synced public opportunities
               </p>
             </div>
             <button
@@ -1010,18 +1051,26 @@ export const AdminDashboard: React.FC = () => {
                     <span className="font-bold text-xs text-slate-900 dark:text-white">{job.title}</span>
                     <span className="text-[11px] text-slate-500">at {job.company}</span>
                     <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2 py-0.5 rounded-full border border-emerald-200">
-                      ✓ Verified Employer
+                      ✓ {job.opportunitySource || 'Verified Employer'}
                     </span>
                     <span className="text-[10px] bg-[#E6F4FF] text-[#0284C7] font-semibold px-2 py-0.5 rounded-full capitalize">
                       {job.type}
                     </span>
                   </div>
-                  <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                  <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2">
                     <span>{job.location}</span>
-                    <span>•</span>
-                    <span className="font-bold text-slate-700 dark:text-slate-300">{job.stipend}</span>
-                    <span>•</span>
-                    <span>{job.duration}</span>
+                    {job.stipend && (
+                      <>
+                        <span>•</span>
+                        <span className="font-bold text-slate-700 dark:text-slate-300">{job.stipend}</span>
+                      </>
+                    )}
+                    {job.duration && (
+                      <>
+                        <span>•</span>
+                        <span>{job.duration}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -1398,6 +1447,17 @@ export const AdminDashboard: React.FC = () => {
                   value={newJobSkills}
                   onChange={(e) => setNewJobSkills(e.target.value)}
                   placeholder="Java, React, SQL, Git"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Official Application Link (Optional)</label>
+                <input
+                  type="url"
+                  value={newJobApplyUrl}
+                  onChange={(e) => setNewJobApplyUrl(e.target.value)}
+                  placeholder="https://company.in/careers/intern-role"
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white outline-none"
                 />
               </div>

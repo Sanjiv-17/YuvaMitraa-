@@ -116,15 +116,39 @@
         },
         "skills": {
           "type": "array",
-          "description": "Candidate skills list"
+          "description": "Candidate technical skills list"
+        },
+        "nonTechnicalSkills": {
+          "type": "array",
+          "description": "Candidate soft and non-technical skills list"
         },
         "interests": {
           "type": "array",
-          "description": "Career interests list"
+          "description": "Areas of interest list"
         },
         "preferredRoles": {
           "type": "array",
           "description": "Preferred job roles"
+        },
+        "preferredDomain": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Preferred internship domain"
+        },
+        "careerGoals": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Student career goals and aspirations"
+        },
+        "preferredLocation": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Preferred internship location"
+        },
+        "workModePreference": {
+          "type": "string",
+          "enum": ["Online", "Offline", "Hybrid", "Any"],
+          "description": "Preferred work mode (Online, Offline, Hybrid, or Any)"
         },
         "githubUrl": {
           "type": "string",
@@ -289,6 +313,37 @@
         }
       },
       "required": ["fileName", "text", "updatedAt"]
+    },
+    "SavedRecommendations": {
+      "title": "SavedRecommendations",
+      "description": "Private personalized internship recommendations and skill gap snapshot stored at users/{uid}/recommendations/current",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Owner student UID"
+        },
+        "profileSignature": {
+          "type": "string",
+          "maxLength": 256,
+          "description": "Profile fingerprint used to compute recommendations"
+        },
+        "recommendations": {
+          "type": "array",
+          "description": "Ranked internship matches with weighted score breakdown and skill gap info"
+        },
+        "overallMissingSkills": {
+          "type": "array",
+          "description": "Top missing skills the student should improve"
+        },
+        "updatedAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO timestamp when recommendations were generated"
+        }
+      },
+      "required": ["userId", "profileSignature", "recommendations", "updatedAt"]
     }
   },
   "firestore": {
@@ -299,6 +354,10 @@
     "/users/{userId}/resume/{resumeId}": {
       "schema": "SavedResume",
       "description": "Single extracted resume document ('current') per user, overwritten on re-upload"
+    },
+    "/users/{userId}/recommendations/{recId}": {
+      "schema": "SavedRecommendations",
+      "description": "Private personalized AI internship recommendation cache ('current') per student"
     },
     "/admins/{adminId}": {
       "schema": "User",

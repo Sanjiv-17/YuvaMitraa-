@@ -25,12 +25,20 @@ import {
   Loader2,
   Globe,
   Building,
-  Target
+  Target,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Job } from '../../types';
-import { reportJobApi, fetchPersonalizedRecommendationsApi } from '../../services/api';
+import { reportJobApi } from '../../services/api';
 import { openExternalUrl } from '../../utils/navigation';
+import {
+  isRemoteOrGlobalLocation,
+  hasStudentProfileSignals,
+  matchJobWithStudentProfile
+} from '../../utils/opportunityFilter';
+import { RecommendedForYou } from '../recommendations/RecommendedForYou';
 
 export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false }) => {
   const { 
@@ -42,6 +50,13 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
     userLocation, 
     refreshUserLocation, 
     calculateDistance,
+    isLoadingOpportunities,
+    opportunitiesError,
+    firestoreInternshipsCount,
+    refreshOpportunities,
+    isLoadingRecommendations,
+    refreshRecommendations,
+    setActiveTab,
     t 
   } = useApp();
 
@@ -49,17 +64,12 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedType, setSelectedType] = useState<string>('All');
   const [selectedSource, setSelectedSource] = useState<string>('All');
+  const [matchMyProfileOnly, setMatchMyProfileOnly] = useState<boolean>(false);
   const [minStipend, setMinStipend] = useState<number>(0);
-  const [maxRadiusKm, setMaxRadiusKm] = useState<number>(50);
+  const [maxRadiusKm, setMaxRadiusKm] = useState<number>(100);
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [isLocating, setIsLocating] = useState(false);
   const [selectedMapPinJob, setSelectedMapPinJob] = useState<Job | null>(null);
-
-  // AI Personalized Recommendations State
-  const [recommendations, setRecommendations] = useState<any[]>([]);
-  const [isLoadingRecommendations, setIsLoadingRecommendations] = useState(false);
-  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
-  const [showRecommendations, setShowRecommendations] = useState(false);
 
   // Voice Search State
   const [isListening, setIsListening] = useState(false);
@@ -71,14 +81,16 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportNotice, setReportNotice] = useState<string | null>(null);
 
-  const categories = ['All', 'Tech', 'Marketing', 'Finance', 'Design', 'Government', 'Operations'];
+  const categories = ['All', 'Tech', 'Marketing', 'Finance', 'Design', 'Government', 'Operations', 'Healthcare'];
   const types = ['All', 'internship', 'part-time', 'full-time', 'remote'];
   const sourceOptions = [
     { id: 'All', label: 'All Sources' },
+    { id: 'Arbeitnow', label: 'Arbeitnow', icon: Globe },
+    { id: 'Remotive', label: 'Remotive', icon: Globe },
+    { id: 'Firestore', label: firestoreInternshipsCount > 0 ? `Verified Indian (${firestoreInternshipsCount})` : 'Verified Indian (Firestore)', icon: ShieldCheck },
     { id: 'AICTE', label: 'AICTE Portal', icon: Globe },
-    { id: 'IndianAPI', label: 'IndianAPI Jobs', icon: Building2 },
     { id: 'NCS', label: 'NCS Portal', icon: Building },
-    { id: 'Direct', label: 'Campus & Direct', icon: ShieldCheck }
+    { id: 'Direct', label: 'Campus & Direct', icon: Building2 }
   ];
   const radiusOptions = [5, 10, 25, 50, 100];
 
@@ -113,7 +125,8 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   };
 
   const handleShareWhatsapp = (job: Job) => {
-    const text = `Hey! Found this verified opening on YuvaMitraa: *${job.title}* at *${job.company}* (${job.stipend}). Location: ${job.location}. Check it out on YuvaMitraa!`;
+    const comp = job.stipend ? ` (${job.stipend})` : '';
+    const text = `Hey! Found this opening on YuvaMitraa: *${job.title}* at *${job.company}*${comp}. Location: ${job.location}. Check it out on YuvaMitraa!`;
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     openExternalUrl(url);
   };
@@ -144,38 +157,28 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
     }
   };
 
-  // Fetch AI personalized recommendations
+  // Refresh AI personalized recommendations automatically synced via AppContext
   const handleFetchRecommendations = async (forceRefresh = false) => {
-    setShowRecommendations(true);
-    setRecommendationsError(null);
-    if (!forceRefresh && recommendations.length > 0) return;
-    setIsLoadingRecommendations(true);
-    try {
-      const res = await fetchPersonalizedRecommendationsApi(user, 6);
-      if (res?.recommendations) {
-        setRecommendations(res.recommendations);
-      }
-    } catch (err: any) {
-      setRecommendationsError(err?.message || 'Unable to generate AI smart matches right now.');
-    } finally {
-      setIsLoadingRecommendations(false);
-    }
+    await refreshRecommendations(forceRefresh);
   };
 
+  const profileHasSignals = useMemo(() => hasStudentProfileSignals(user), [user]);
+
   const filteredJobs = useMemo(() => {
-    return jobs.filter((job) => {
+    const list = jobs.filter((job) => {
       if (savedOnly && !(savedJobIds || []).includes(job.id)) {
         return false;
       }
 
-      // Keyword filter
+      // Keyword filter (title, company, skills, description, location)
       if (searchKeyword.trim()) {
         const q = searchKeyword.toLowerCase();
         const matchesTitle = job.title.toLowerCase().includes(q);
         const matchesCompany = job.company.toLowerCase().includes(q);
         const matchesSkills = (job.requiredSkills || []).some(s => s.toLowerCase().includes(q));
         const matchesLocation = job.location.toLowerCase().includes(q);
-        if (!matchesTitle && !matchesCompany && !matchesSkills && !matchesLocation) {
+        const matchesDesc = (job.description || '').toLowerCase().includes(q);
+        if (!matchesTitle && !matchesCompany && !matchesSkills && !matchesLocation && !matchesDesc) {
           return false;
         }
       }
@@ -184,14 +187,36 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
       if (selectedSource !== 'All') {
         const src = (job.opportunitySource || '').toLowerCase();
         const extUrl = (job.externalSourceUrl || job.originalUrl || '').toLowerCase();
-        if (selectedSource === 'AICTE') {
+        const ev = (job.verificationEvidence || '').toLowerCase();
+        if (selectedSource === 'Arbeitnow') {
+          if (!src.includes('arbeitnow') && !extUrl.includes('arbeitnow')) return false;
+        } else if (selectedSource === 'Remotive') {
+          if (!src.includes('remotive') && !extUrl.includes('remotive')) return false;
+        } else if (selectedSource === 'Firestore') {
+          if (!src.includes('firestore') && !ev.includes('firestore')) return false;
+        } else if (selectedSource === 'AICTE') {
           if (!src.includes('aicte') && !extUrl.includes('aicte')) return false;
         } else if (selectedSource === 'IndianAPI') {
           if (!src.includes('indianapi') && !extUrl.includes('indianapi')) return false;
         } else if (selectedSource === 'NCS') {
           if (!src.includes('national career') && !src.includes('ncs') && !extUrl.includes('ncs.gov.in')) return false;
         } else if (selectedSource === 'Direct') {
-          if (src.includes('aicte') || src.includes('indianapi') || src.includes('ncs') || extUrl.includes('aicte') || extUrl.includes('indianapi') || extUrl.includes('ncs')) return false;
+          if (
+            src.includes('arbeitnow') ||
+            src.includes('remotive') ||
+            src.includes('firestore') ||
+            ev.includes('firestore') ||
+            src.includes('aicte') ||
+            src.includes('indianapi') ||
+            src.includes('ncs') ||
+            extUrl.includes('arbeitnow') ||
+            extUrl.includes('remotive') ||
+            extUrl.includes('aicte') ||
+            extUrl.includes('indianapi') ||
+            extUrl.includes('ncs.gov.in')
+          ) {
+            return false;
+          }
         }
       }
 
@@ -210,17 +235,8 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         return false;
       }
 
-      // Radius filter: Remote & Pan-India/National jobs always pass, else calculate distance
-      const locLower = (job.location || '').toLowerCase().trim();
-      const isPanIndiaOrRemote =
-        job.type === 'remote' ||
-        locLower === 'india' ||
-        locLower.includes('pan-india') ||
-        locLower.includes('pan india') ||
-        locLower.includes('nationwide') ||
-        locLower.includes('anywhere') ||
-        locLower.includes('remote') ||
-        locLower.includes('work from home');
+      // Radius filter: Remote, Global & Pan-India jobs always pass, else calculate distance
+      const isPanIndiaOrRemote = isRemoteOrGlobalLocation(job.location, job.type, job.opportunitySource);
       if (!isPanIndiaOrRemote && maxRadiusKm < 100) {
         const distance = calculateDistance(job.coordinates);
         if (distance > maxRadiusKm) {
@@ -228,9 +244,40 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         }
       }
 
+      // Student profile filter (skills, education, interests & location)
+      if (matchMyProfileOnly && profileHasSignals) {
+        const match = matchJobWithStudentProfile(job, user);
+        if (!match.matches) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [jobs, savedOnly, savedJobIds, searchKeyword, selectedSource, selectedCategory, selectedType, minStipend, maxRadiusKm, calculateDistance]);
+
+    if (matchMyProfileOnly && profileHasSignals) {
+      return [...list].sort(
+        (a, b) =>
+          matchJobWithStudentProfile(b, user).relevanceScore -
+          matchJobWithStudentProfile(a, user).relevanceScore
+      );
+    }
+    return list;
+  }, [
+    jobs,
+    savedOnly,
+    savedJobIds,
+    searchKeyword,
+    selectedSource,
+    selectedCategory,
+    selectedType,
+    minStipend,
+    maxRadiusKm,
+    calculateDistance,
+    matchMyProfileOnly,
+    profileHasSignals,
+    user,
+  ]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12 font-['Poppins',sans-serif]">
@@ -242,14 +289,26 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
             Internship & Job Finder
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
-            Real-world opportunities from AICTE National Portal, IndianAPI & NCS with AI eligibility matching
+            Free public opportunities from Arbeitnow &amp; Remotive, Verified Indian Internships (Firestore), plus official AICTE &amp; NCS portals
           </p>
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-          {/* AI Recommendations Trigger */}
+          {/* Reload Live Opportunities Feed */}
           <button
-            onClick={() => handleFetchRecommendations(false)}
+            type="button"
+            onClick={() => void refreshOpportunities()}
+            disabled={isLoadingOpportunities}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-all cursor-pointer disabled:opacity-60"
+            title="Refresh public API and Firestore listings"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoadingOpportunities ? 'animate-spin text-[#FF7A00]' : ''}`} />
+            <span>{isLoadingOpportunities ? 'Refreshing...' : 'Refresh Feed'}</span>
+          </button>
+
+          {/* AI Recommendations Refresh Trigger */}
+          <button
+            onClick={() => handleFetchRecommendations(true)}
             disabled={isLoadingRecommendations}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white shadow-xs hover:shadow-md transition-all cursor-pointer"
           >
@@ -290,6 +349,33 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         </div>
       </div>
 
+      {/* Loading Indicator for Live Feeds */}
+      {isLoadingOpportunities && (
+        <div className="p-3.5 rounded-2xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-sky-900 dark:text-sky-200 text-xs flex items-center gap-2.5">
+          <Loader2 className="w-4 h-4 text-[#0284C7] animate-spin shrink-0" />
+          <span className="font-semibold">
+            Fetching live job &amp; internship opportunities from Arbeitnow, Remotive &amp; Firebase Firestore...
+          </span>
+        </div>
+      )}
+
+      {/* Error State with Retry */}
+      {opportunitiesError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span className="font-semibold">{opportunitiesError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void refreshOpportunities()}
+            className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shrink-0 self-start sm:self-auto cursor-pointer"
+          >
+            Retry Fetch
+          </button>
+        </div>
+      )}
+
       {/* Global Success / Report Banner */}
       {reportNotice && (
         <div className="p-3.5 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs flex items-center gap-2">
@@ -298,112 +384,73 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         </div>
       )}
 
-      {/* AI Smart Recommendations Banner / Card */}
-      {showRecommendations && (
-        <div className="bg-gradient-to-r from-orange-500/10 via-amber-500/10 to-sky-500/10 dark:from-orange-950/40 dark:via-amber-950/40 dark:to-sky-950/40 p-5 rounded-3xl border border-orange-200 dark:border-orange-800 shadow-sm space-y-4 animate-in fade-in duration-300">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[#FF7A00] text-white flex items-center justify-center shadow-xs">
-                <Sparkles className="w-4 h-4" />
+      {/* Official Indian Government Internship Discovery Portals (AICTE & NCS) */}
+      {!savedOnly && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          <a
+            href="https://internship.aicte-india.org/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group p-4 rounded-2xl bg-gradient-to-r from-orange-50 via-white to-amber-50/70 dark:from-slate-800 dark:to-slate-800/90 border border-orange-200/80 dark:border-slate-700 hover:border-[#FF7A00] shadow-2xs hover:shadow-sm transition-all flex items-center justify-between gap-3"
+          >
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-[#FF7A00]/15 text-[#FF7A00] flex items-center justify-center shrink-0">
+                <Globe className="w-5 h-5" />
               </div>
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                  <span>AI Career Recommendations for You</span>
-                  <span className="text-[10px] bg-orange-100 text-[#FF7A00] font-bold px-2 py-0.5 rounded-full">
-                    Gemini Match Engine
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white group-hover:text-[#FF7A00] transition-colors">
+                    AICTE National Internship Portal
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-100 dark:bg-orange-950/60 text-[#E06900] dark:text-orange-300">
+                    Official Govt Portal
                   </span>
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Ranked genuine openings matched to your education ({user?.branch || user?.education || 'Engineering'}), skills ({(user?.skills || []).slice(0, 3).join(', ') || 'Technical'}), and location ({user?.location || 'India'}).
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                  Explore official AICTE, Smart India &amp; MSME verified student internships across India directly on internship.aicte-india.org.
                 </p>
               </div>
             </div>
+            <span className="px-3 py-1.5 rounded-xl bg-[#FF7A00] text-white text-[11px] font-bold shrink-0 flex items-center gap-1">
+              <span>Visit AICTE</span>
+              <ExternalLink className="w-3 h-3" />
+            </span>
+          </a>
 
-            <button
-              onClick={() => setShowRecommendations(false)}
-              className="text-slate-400 hover:text-slate-600 p-1"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          {isLoadingRecommendations ? (
-            <div className="py-8 flex flex-col items-center justify-center text-xs text-slate-500 gap-2">
-              <Loader2 className="w-5 h-5 animate-spin text-[#FF7A00]" />
-              <span>Analyzing genuine live opportunities against your profile...</span>
+          <a
+            href="https://www.ncs.gov.in/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group p-4 rounded-2xl bg-gradient-to-r from-sky-50 via-white to-emerald-50/50 dark:from-slate-800 dark:to-slate-800/90 border border-sky-200/80 dark:border-slate-700 hover:border-[#0284C7] shadow-2xs hover:shadow-sm transition-all flex items-center justify-between gap-3"
+          >
+            <div className="flex items-start gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-[#0284C7]/15 text-[#0284C7] flex items-center justify-center shrink-0">
+                <Building className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white group-hover:text-[#0284C7] transition-colors">
+                    National Career Service (NCS)
+                  </h3>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-sky-100 dark:bg-sky-950/60 text-[#0284C7] dark:text-sky-300">
+                    Ministry of Labour
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                  Discover verified Indian private &amp; public sector openings, career counseling &amp; skill fairs at ncs.gov.in.
+                </p>
+              </div>
             </div>
-          ) : recommendationsError ? (
-            <div className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200 text-xs flex items-center justify-between gap-3">
-              <span>{recommendationsError}</span>
-              <button
-                type="button"
-                onClick={() => handleFetchRecommendations(true)}
-                className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shrink-0 cursor-pointer"
-              >
-                Retry
-              </button>
-            </div>
-          ) : recommendations.length === 0 ? (
-            <div className="text-xs text-slate-500 py-3">
-              Click &quot;AI Smart Matches&quot; above to calculate personalized matches for your branch and skills.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {recommendations.slice(0, 3).map((rec: any, rIdx: number) => {
-                const targetJob = jobs.find(j => j.id === (rec.jobId || rec.id));
-                return (
-                  <div
-                    key={rIdx}
-                    className="p-3.5 rounded-2xl bg-white dark:bg-slate-800 border border-orange-100 dark:border-slate-700 shadow-2xs space-y-2 hover:border-[#FF7A00] transition-colors"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#FF7A00] bg-orange-50 dark:bg-orange-950 px-2 py-0.5 rounded-md inline-block mb-1">
-                          {rec.sourceName || rec.source || 'Verified Portal'}
-                        </span>
-                        <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-1">
-                          {rec.title}
-                        </h4>
-                        <p className="text-[11px] text-slate-500 font-medium">
-                          {rec.companyName || rec.company}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-xs font-black text-emerald-600 bg-emerald-50 dark:bg-emerald-950 px-2 py-0.5 rounded-full">
-                          {rec.matchScore}%
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="text-[11px] text-slate-600 dark:text-slate-300 line-clamp-2 italic bg-slate-50 dark:bg-slate-900 p-2 rounded-xl">
-                      &quot;{rec.matchReason}&quot;
-                    </p>
-
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[10px] font-bold text-slate-700 dark:text-slate-300">
-                        {rec.stipendOrSalary || rec.stipend}
-                      </span>
-                      <button
-                        onClick={() => {
-                          if (targetJob) {
-                            setSelectedJobForDetail(targetJob);
-                          } else if (rec.originalUrl || rec.applyUrl) {
-                            openExternalUrl(rec.originalUrl || rec.applyUrl);
-                          }
-                        }}
-                        className="text-[11px] font-bold text-[#FF7A00] hover:underline flex items-center gap-1 cursor-pointer"
-                      >
-                        <span>View Opportunity</span>
-                        <ChevronRight className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+            <span className="px-3 py-1.5 rounded-xl bg-[#0284C7] text-white text-[11px] font-bold shrink-0 flex items-center gap-1">
+              <span>Visit NCS</span>
+              <ExternalLink className="w-3 h-3" />
+            </span>
+          </a>
         </div>
       )}
+
+      {/* Personalized AI Internship Matching & Skill Gap Analysis */}
+      {!savedOnly && <RecommendedForYou />}
 
       {/* Search & Location Bar */}
       <div className="bg-white dark:bg-slate-800 p-4 sm:p-5 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
@@ -433,13 +480,13 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
           
           {/* Main Keyword Input with Voice Search */}
-          <div className="md:col-span-6 relative flex items-center">
+          <div className="md:col-span-5 relative flex items-center">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5" />
             <input
               type="text"
               value={searchKeyword}
               onChange={(e) => setSearchKeyword(e.target.value)}
-              placeholder="Search by role, skills (e.g. React, Python) or company..."
+              placeholder="Search by role, skills (e.g. React, Python), company or description..."
               className="w-full pl-9.5 pr-10 py-2.5 text-xs bg-slate-50 dark:bg-slate-900 focus:bg-white text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700 focus:border-[#FF7A00] rounded-xl outline-hidden transition-all"
             />
             <button
@@ -456,33 +503,66 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
             </button>
           </div>
 
-          {/* GPS Location Button */}
+          {/* Filter by Student Profile Button */}
           <div className="md:col-span-3 flex items-center">
+            <button
+              type="button"
+              onClick={() => setMatchMyProfileOnly((prev) => !prev)}
+              className={`w-full flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl font-bold text-xs border transition-all cursor-pointer ${
+                matchMyProfileOnly
+                  ? 'bg-[#FF7A00] text-white border-[#FF7A00] shadow-xs'
+                  : 'bg-orange-50 dark:bg-orange-950/30 hover:bg-orange-100 text-[#E06900] dark:text-orange-300 border-orange-200 dark:border-orange-800'
+              }`}
+            >
+              <Target className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{matchMyProfileOnly ? 'Profile Match: ON' : 'Match My Profile'}</span>
+            </button>
+          </div>
+
+          {/* GPS Location Button */}
+          <div className="md:col-span-2 flex items-center">
             <button
               onClick={handleUseLocation}
               disabled={isLocating}
-              className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-[#E6F4FF] dark:bg-sky-950/60 hover:bg-[#D4EDFF] text-[#0284C7] dark:text-sky-300 font-semibold text-xs border border-sky-200/60 dark:border-sky-800 transition-colors cursor-pointer"
+              className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-[#E6F4FF] dark:bg-sky-950/60 hover:bg-[#D4EDFF] text-[#0284C7] dark:text-sky-300 font-semibold text-xs border border-sky-200/60 dark:border-sky-800 transition-colors cursor-pointer"
             >
-              <Navigation className={`w-3.5 h-3.5 ${isLocating ? 'animate-spin' : ''}`} />
-              <span>{isLocating ? 'Locating GPS...' : 'Use My GPS Location'}</span>
+              <Navigation className={`w-3.5 h-3.5 shrink-0 ${isLocating ? 'animate-spin' : ''}`} />
+              <span className="truncate">{isLocating ? 'Locating...' : 'GPS'}</span>
             </button>
           </div>
 
           {/* Work Type Dropdown */}
-          <div className="md:col-span-3">
+          <div className="md:col-span-2">
             <select
               value={selectedType}
               onChange={(e) => setSelectedType(e.target.value)}
               className="w-full py-2.5 px-3 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-700 dark:text-slate-200 capitalize cursor-pointer"
             >
-              <option value="All">All Job Types</option>
+              <option value="All">All Types</option>
               <option value="internship">Internships Only</option>
               <option value="full-time">Full-Time Jobs</option>
-              <option value="remote">Remote (Work from Home)</option>
+              <option value="part-time">Part-Time Jobs</option>
+              <option value="remote">Remote Jobs</option>
             </select>
           </div>
 
         </div>
+
+        {/* Profile Match Nudge if student has no profile signals yet */}
+        {matchMyProfileOnly && !profileHasSignals && (
+          <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <span className="text-amber-900 dark:text-amber-200 font-medium">
+              Add your skills, education, interests, or preferred location in your Student Profile to filter listings accurately.
+            </span>
+            <button
+              type="button"
+              onClick={() => setActiveTab('profile')}
+              className="px-3 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shrink-0 self-start sm:self-auto cursor-pointer"
+            >
+              Update Profile
+            </button>
+          </div>
+        )}
 
         {/* Categories Bar & Quick Radius Filter Pills */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-700">
@@ -604,7 +684,9 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                   </button>
                 </div>
                 <div className="mt-3 flex items-center justify-between text-xs">
-                  <span className="font-bold text-[#FF7A00]">{selectedMapPinJob.stipend}</span>
+                  <span className="font-bold text-[#FF7A00]">
+                    {selectedMapPinJob.stipend || 'Compensation not disclosed'}
+                  </span>
                   <button
                     onClick={() => setSelectedJobForDetail(selectedMapPinJob)}
                     className="px-3 py-1 bg-[#FF7A00] text-white rounded-lg font-bold text-[11px]"
@@ -619,65 +701,91 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
       ) : (
         /* List View */
         <div className="space-y-3.5">
-          <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1 flex items-center justify-between">
-            <span>Showing {filteredJobs.length} verified opportunities</span>
+          <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Showing {filteredJobs.length} verified &amp; public opportunities
+              {matchMyProfileOnly && profileHasSignals ? ' matching your student profile' : ''}
+            </span>
             <span className="text-[11px] text-emerald-600 font-bold flex items-center gap-1">
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>100% Recruiter Verified</span>
+              <span>Arbeitnow • Remotive • Verified Firestore • Zero Fake Listings</span>
             </span>
           </div>
 
           {filteredJobs.length === 0 ? (
             <div className="bg-white dark:bg-slate-800 p-12 text-center rounded-3xl border border-slate-200 dark:border-slate-700 text-slate-500">
-              {savedOnly ? (
-                <Bookmark className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              {isLoadingOpportunities ? (
+                <>
+                  <Loader2 className="w-8 h-8 text-[#FF7A00] animate-spin mx-auto mb-2" />
+                  <p className="font-semibold text-sm text-slate-700 dark:text-slate-200">
+                    Loading live opportunities...
+                  </p>
+                </>
               ) : (
-                <Search className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <>
+                  {savedOnly ? (
+                    <Bookmark className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  ) : (
+                    <Search className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  )}
+                  <p className="font-semibold text-sm text-slate-700 dark:text-slate-200">
+                    {savedOnly ? 'No saved opportunities yet' : 'No jobs or internships match your current filters'}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {savedOnly
+                      ? 'Bookmark internships or jobs from All Opportunities to track them here.'
+                      : 'Try resetting your source, profile match toggle, or keyword filters.'}
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSearchKeyword('');
+                      setSelectedCategory('All');
+                      setSelectedType('All');
+                      setSelectedSource('All');
+                      setMatchMyProfileOnly(false);
+                      setMaxRadiusKm(100);
+                    }}
+                    className="mt-4 px-4 py-2 bg-orange-50 dark:bg-orange-950/60 text-[#FF7A00] text-xs font-bold rounded-xl hover:bg-orange-100 cursor-pointer"
+                  >
+                    Reset Filters
+                  </button>
+                </>
               )}
-              <p className="font-semibold text-sm text-slate-700 dark:text-slate-200">
-                {savedOnly ? 'No saved opportunities yet' : 'No jobs match your criteria'}
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                {savedOnly
-                  ? 'Bookmark internships or jobs from All Opportunities to track them here.'
-                  : 'Try increasing your search radius or selecting "All" categories.'}
-              </p>
-              <button
-                onClick={() => {
-                  setSearchKeyword('');
-                  setSelectedCategory('All');
-                  setSelectedType('All');
-                  setSelectedSource('All');
-                  setMaxRadiusKm(100);
-                }}
-                className="mt-4 px-4 py-2 bg-orange-50 dark:bg-orange-950/60 text-[#FF7A00] text-xs font-bold rounded-xl hover:bg-orange-100 cursor-pointer"
-              >
-                Reset Filters
-              </button>
             </div>
           ) : (
             filteredJobs.map((job) => {
-              const distance = calculateDistance(job.coordinates);
+              const isRemoteOrGlobal = isRemoteOrGlobalLocation(job.location, job.type, job.opportunitySource);
+              const distance = !isRemoteOrGlobal ? calculateDistance(job.coordinates) : 0;
               const isSaved = (savedJobIds || []).includes(job.id);
+              const profileMatch = matchJobWithStudentProfile(job, user);
               const userSkillSet = (user?.skills || []).map(s => s.toLowerCase());
               const matchedCount = (job.requiredSkills || []).filter(s => 
                 userSkillSet.some(us => us.includes(s.toLowerCase()) || s.toLowerCase().includes(us))
               ).length;
-              const matchPct = Math.min(98, Math.max(45, Math.round((matchedCount / Math.max(1, (job.requiredSkills || []).length)) * 100)));
+              const matchPct = profileHasSignals
+                ? Math.max(profileMatch.relevanceScore, Math.round((matchedCount / Math.max(1, (job.requiredSkills || []).length)) * 100))
+                : 0;
+              const externalLink = job.originalUrl || job.externalSourceUrl;
+              const applyButtonLabel =
+                job.opportunitySource === 'Remotive'
+                  ? 'Apply on Remotive'
+                  : job.opportunitySource === 'Arbeitnow'
+                  ? 'Apply on Arbeitnow'
+                  : 'Official Portal';
 
               return (
                 <div
                   key={job.id}
                   className="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-700 shadow-xs hover:border-[#FF7A00]/50 hover:shadow-md transition-all flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
                 >
-                  <div className="flex items-start gap-4 flex-1">
+                  <div className="flex items-start gap-4 flex-1 min-w-0">
                     <img
-                      src={job.companyLogo}
+                      src={job.companyLogo || `https://ui-avatars.com/api/?name=${encodeURIComponent(job.company || 'YM')}&background=FF7A00&color=fff`}
                       alt={job.company}
-                      className="w-13 h-13 rounded-2xl object-cover border border-slate-100 dark:border-slate-700 shrink-0 shadow-xs"
+                      className="w-13 h-13 rounded-2xl object-cover border border-slate-100 dark:border-slate-700 shrink-0 shadow-xs bg-slate-50"
                     />
 
-                    <div className="space-y-1.5 flex-1">
+                    <div className="space-y-1.5 flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white hover:text-[#FF7A00] transition-colors cursor-pointer"
                             onClick={() => setSelectedJobForDetail(job)}>
@@ -697,10 +805,10 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                           </span>
                         )}
 
-                        {/* Opportunity Source Tag */}
+                        {/* Opportunity Source Tag (mentions Remotive / Arbeitnow / Firestore / Direct) */}
                         <span className="text-[10px] bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-600 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
                           <span>{job.opportunitySource || 'Direct Employer'}</span>
-                          {(job.originalUrl || job.externalSourceUrl) && (
+                          {externalLink && (
                             <ExternalLink className="w-2.5 h-2.5 text-blue-500" />
                           )}
                         </span>
@@ -719,21 +827,23 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                         <span className="text-[10px] bg-[#E6F4FF] dark:bg-sky-950 text-[#0284C7] dark:text-sky-300 px-2 py-0.5 rounded-full font-semibold capitalize">
                           {job.type}
                         </span>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
-                          matchPct >= 75 
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                            : matchPct >= 55 
-                              ? 'bg-amber-50 text-amber-700 border border-amber-200' 
-                              : 'bg-blue-50 text-blue-700 border border-blue-200'
-                        }`}>
-                          <Sparkles className="w-2.5 h-2.5" />
-                          <span>{matchPct}% AI Match</span>
-                        </span>
+                        {profileHasSignals && matchPct > 0 && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 ${
+                            matchPct >= 75 
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                              : matchPct >= 50 
+                                ? 'bg-amber-50 text-amber-700 border border-amber-200' 
+                                : 'bg-blue-50 text-blue-700 border border-blue-200'
+                          }`}>
+                            <Sparkles className="w-2.5 h-2.5" />
+                            <span>{matchPct}% Profile Match</span>
+                          </span>
+                        )}
                       </div>
 
                       <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">{job.company}</p>
 
-                      <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+                      <div className="flex flex-wrap items-center gap-2.5 text-[11px] text-slate-500 dark:text-slate-400">
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3.5 h-3.5 text-slate-400" />
                           <span>{job.location}</span>
@@ -741,14 +851,42 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                             <span className="text-[#FF7A00] font-bold">({distance} km away)</span>
                           )}
                         </span>
-                        <span>•</span>
-                        <span className="font-bold text-slate-800 dark:text-slate-200">{job.stipend}</span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-slate-400" />
-                          <span>{job.duration}</span>
-                        </span>
+                        {job.stipend && (
+                          <>
+                            <span>•</span>
+                            <span className="font-bold text-slate-800 dark:text-slate-200">{job.stipend}</span>
+                          </>
+                        )}
+                        {job.duration && (
+                          <>
+                            <span>•</span>
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-slate-400" />
+                              <span>{job.duration}</span>
+                            </span>
+                          </>
+                        )}
                       </div>
+
+                      {job.description && (
+                        <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2 leading-relaxed">
+                          {job.description}
+                        </p>
+                      )}
+
+                      {profileHasSignals && profileMatch.matchedCriteria.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-emerald-700 dark:text-emerald-300 font-semibold">
+                          <span>Matched:</span>
+                          {profileMatch.matchedCriteria.map((criterion, cIdx) => (
+                            <span
+                              key={cIdx}
+                              className="px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800"
+                            >
+                              {criterion}
+                            </span>
+                          ))}
+                        </div>
+                      )}
 
                       <div className="flex flex-wrap items-center gap-1.5 pt-1">
                         {(job.requiredSkills || []).map((skill, sIdx) => (
@@ -795,17 +933,17 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                         <Flag className="w-4 h-4" />
                       </button>
 
-                      {/* Official Portal Link (if external genuine source) */}
-                      {(job.originalUrl || job.externalSourceUrl) && (
+                      {/* Direct Source / External Application Link */}
+                      {externalLink && (
                         <a
-                          href={job.originalUrl || job.externalSourceUrl}
+                          href={externalLink}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-3 py-2 rounded-xl bg-sky-50 dark:bg-sky-950/60 hover:bg-sky-100 text-[#0284C7] dark:text-sky-300 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer border border-sky-200 dark:border-sky-800"
-                          title="Apply on authentic external portal"
+                          title={`Apply directly via ${job.opportunitySource || 'external source'}`}
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
-                          <span className="hidden sm:inline">Official</span> Portal
+                          <span>{applyButtonLabel}</span>
                         </a>
                       )}
 
@@ -814,12 +952,13 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                         className="px-4 py-2.5 rounded-xl bg-[#FF7A00] hover:bg-[#E06900] text-white text-xs font-bold shadow-xs hover:shadow-md transition-all flex items-center gap-1.5 cursor-pointer"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        <span>Check Eligibility</span>
+                        <span>View &amp; Check Fit</span>
                       </button>
                     </div>
 
                     <span className="text-[10px] text-slate-400">
-                      Posted {job.postedDate} • {job.applicantsCount} applied
+                      Posted {job.postedDate}
+                      {job.applicantsCount > 0 ? ` • ${job.applicantsCount} applied` : ''}
                     </span>
                   </div>
 

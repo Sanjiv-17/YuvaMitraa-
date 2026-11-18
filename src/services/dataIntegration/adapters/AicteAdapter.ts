@@ -1,5 +1,10 @@
 import { IDataSourceAdapter, AdapterSyncResult } from '../types';
 import { InternshipListing, SourceAdapterInfo } from '../../../types';
+import {
+  formatCredentialConfigMessage,
+  isValidHttpEndpoint,
+  validateHeaderCredential,
+} from '../credentialUtils';
 
 /**
  * AICTE National Internship Portal Adapter
@@ -20,18 +25,24 @@ export class AicteInternshipAdapter implements IDataSourceAdapter {
   readonly documentationUrl = 'https://internship.aicte-india.org/about_us.php';
   readonly description = 'Official Government of India portal by AICTE (Ministry of Education) connecting engineering and polytechnic students with public sector and corporate internships.';
 
-  private apiKey: string;
-  private clientId: string;
-  private apiEndpoint: string;
+  private get apiKey(): string {
+    return (process.env.AICTE_API_KEY || '').trim();
+  }
 
-  constructor() {
-    this.apiKey = process.env.AICTE_API_KEY || '';
-    this.clientId = process.env.AICTE_CLIENT_ID || '';
-    this.apiEndpoint = process.env.AICTE_PARTNER_ENDPOINT || 'https://internship.aicte-india.org/api/v1/internships';
+  private get clientId(): string {
+    return (process.env.AICTE_CLIENT_ID || '').trim();
+  }
+
+  private get apiEndpoint(): string {
+    return (process.env.AICTE_PARTNER_ENDPOINT || 'https://internship.aicte-india.org/api/v1/internships').trim();
   }
 
   isConfigured(): boolean {
-    return Boolean(this.apiKey && this.clientId);
+    return (
+      validateHeaderCredential(this.apiKey).valid &&
+      validateHeaderCredential(this.clientId).valid &&
+      isValidHttpEndpoint(this.apiEndpoint)
+    );
   }
 
   getInfo(totalListings = 0, lastSyncAt = new Date().toISOString()): SourceAdapterInfo {
@@ -54,9 +65,13 @@ export class AicteInternshipAdapter implements IDataSourceAdapter {
 
   async fetchAndNormalize(): Promise<AdapterSyncResult> {
     const now = new Date().toISOString();
+    const apiKeyCheck = validateHeaderCredential(this.apiKey);
+    const clientIdCheck = validateHeaderCredential(this.clientId);
 
-    // If authorized API credentials are NOT provided, skip this source gracefully
-    if (!this.isConfigured()) {
+    // If authorized API credentials are NOT valid/provided, skip this source gracefully
+    if (!apiKeyCheck.valid || !clientIdCheck.valid) {
+      const failedCheck = !apiKeyCheck.valid ? apiKeyCheck : clientIdCheck;
+      const label = !apiKeyCheck.valid ? 'AICTE_API_KEY' : 'AICTE_CLIENT_ID';
       return {
         sourceName: this.name,
         sourceId: this.id,
@@ -66,7 +81,26 @@ export class AicteInternshipAdapter implements IDataSourceAdapter {
         updatedCount: 0,
         duplicateCount: 0,
         expiredCount: 0,
-        errorMessage: 'AICTE_API_KEY and AICTE_CLIENT_ID are optional credentials and not currently configured. Source skipped until authorized partner credentials are provided. Official portal link: https://internship.aicte-india.org/',
+        errorMessage: formatCredentialConfigMessage(
+          failedCheck.reason === 'missing' ? 'AICTE_API_KEY and AICTE_CLIENT_ID' : label,
+          failedCheck,
+          this.officialPortalUrl
+        ),
+        internships: [],
+      };
+    }
+
+    if (!isValidHttpEndpoint(this.apiEndpoint)) {
+      return {
+        sourceName: this.name,
+        sourceId: this.id,
+        status: 'CONFIG_REQUIRED',
+        fetchedCount: 0,
+        insertedCount: 0,
+        updatedCount: 0,
+        duplicateCount: 0,
+        expiredCount: 0,
+        errorMessage: `AICTE_PARTNER_ENDPOINT is invalid. Official portal link: ${this.officialPortalUrl}`,
         internships: [],
       };
     }
@@ -76,8 +110,8 @@ export class AicteInternshipAdapter implements IDataSourceAdapter {
       const response = await fetch(this.apiEndpoint, {
         method: 'GET',
         headers: {
-          'X-API-Key': this.apiKey,
-          'X-Client-ID': this.clientId,
+          'X-API-Key': apiKeyCheck.sanitized,
+          'X-Client-ID': clientIdCheck.sanitized,
           'Accept': 'application/json',
           'User-Agent': 'YuvaMitraa-AICTE-Partner/1.0',
         },
@@ -143,17 +177,21 @@ export class AicteInternshipAdapter implements IDataSourceAdapter {
         internships: normalized,
       };
     } catch (err: any) {
-      console.warn(`[AICTE Adapter] Authorized API call error: ${err.message}. Source skipped.`);
+      const message = err?.message || 'Unknown connection error';
+      const isCredentialFormatErr = /ByteString/i.test(message);
+      console.info(`[AICTE Adapter] Authorized API call skipped/failed: ${message}`);
       return {
         sourceName: this.name,
         sourceId: this.id,
-        status: 'FAILED',
+        status: isCredentialFormatErr ? 'CONFIG_REQUIRED' : 'FAILED',
         fetchedCount: 0,
         insertedCount: 0,
         updatedCount: 0,
         duplicateCount: 0,
         expiredCount: 0,
-        errorMessage: `AICTE authorized endpoint connection failed: ${err.message}`,
+        errorMessage: isCredentialFormatErr
+          ? `AICTE credentials contain characters incompatible with HTTP headers. Verify .env values.`
+          : `AICTE authorized endpoint connection failed: ${message}`,
         internships: [],
       };
     }

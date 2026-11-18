@@ -9,7 +9,14 @@ import { initializeApp as initFirebaseAdminApp, getApps as getFirebaseAdminApps,
 import { getAuth as getFirebaseAdminAuth } from 'firebase-admin/auth';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 import { SyncEngine } from './src/services/dataIntegration/SyncEngine';
-import { InternshipListing, JobListing } from './src/types/index';
+import { parseCompensationAmount } from './src/services/dataIntegration/textUtils';
+import { matchJobWithStudentProfile } from './src/utils/opportunityFilter';
+import { InternshipListing, JobListing, Job } from './src/types/index';
+import {
+  jobToCandidate,
+  rankInternshipsForStudent,
+  UnifiedInternshipCandidate,
+} from './src/services/matchingEngine';
 
 dotenv.config();
 
@@ -28,16 +35,16 @@ try {
   // fallback to default project id
 }
 const firebaseProjectId =
-  process.env.VITE_FIREBASE_PROJECT_ID ||
-  process.env.FIREBASE_PROJECT_ID ||
   cfgProjectId ||
+  process.env.FIREBASE_PROJECT_ID ||
+  process.env.VITE_FIREBASE_PROJECT_ID ||
   'euphoric-blueprint-f7cdj';
 const allowedProjectIds = Array.from(
   new Set([
-    process.env.VITE_FIREBASE_PROJECT_ID,
-    process.env.FIREBASE_PROJECT_ID,
     cfgProjectId,
     firebaseProjectId,
+    process.env.FIREBASE_PROJECT_ID,
+    process.env.VITE_FIREBASE_PROJECT_ID,
   ].filter(Boolean) as string[])
 );
 
@@ -368,14 +375,19 @@ interface UserRecord {
   education?: string;
   institution?: string;
   skills?: string[];
+  nonTechnicalSkills?: string[];
   interests?: string[];
   projects?: StudentProjectRecord[];
   githubUrl?: string;
   linkedinUrl?: string;
   portfolioUrl?: string;
   location?: string;
+  preferredLocation?: string;
+  workModePreference?: 'Online' | 'Offline' | 'Hybrid' | 'Any';
   age?: number;
   preferredRoles?: string[];
+  preferredDomain?: string;
+  careerGoals?: string;
   resumeFileName?: string;
   resumeText?: string;
   resumeUpdatedAt?: string;
@@ -574,8 +586,20 @@ interface JobRecord {
   isVerified: boolean;
   verificationStatus: 'pending' | 'approved' | 'rejected';
   verificationEvidence?: string;
-  opportunitySource: 'Direct Employer' | 'College Placement Cell' | 'National Career Service (NCS)' | 'AICTE Portal' | 'Verified Partner';
+  opportunitySource:
+    | 'Direct Employer'
+    | 'College Placement Cell'
+    | 'National Career Service (NCS)'
+    | 'AICTE Portal'
+    | 'IndianAPI Jobs'
+    | 'Arbeitnow'
+    | 'Remotive'
+    | 'Firestore Verified'
+    | 'Verified Partner'
+    | string;
   externalSourceUrl?: string;
+  originalUrl?: string;
+  dateVerified?: string;
   isGovernmentSponsored?: boolean;
 }
 
@@ -2910,10 +2934,15 @@ const handleUpdateProfile = async (req: Request, res: Response) => {
     cgpa,
     graduationYear,
     location,
+    preferredLocation,
+    workModePreference,
     age,
     skills,
+    nonTechnicalSkills,
     interests,
     preferredRoles,
+    preferredDomain,
+    careerGoals,
     projects,
     githubUrl,
     linkedinUrl,
@@ -2953,10 +2982,22 @@ const handleUpdateProfile = async (req: Request, res: Response) => {
   if (typeof cgpa === 'string') user.cgpa = cgpa.trim();
   if (typeof graduationYear === 'string') user.graduationYear = graduationYear;
   if (typeof location === 'string') user.location = location.trim();
+  if (typeof preferredLocation === 'string') user.preferredLocation = preferredLocation.trim();
+  if (
+    workModePreference === 'Online' ||
+    workModePreference === 'Offline' ||
+    workModePreference === 'Hybrid' ||
+    workModePreference === 'Any'
+  ) {
+    user.workModePreference = workModePreference;
+  }
   if (age !== undefined && age !== null && !Number.isNaN(Number(age))) user.age = Number(age);
   if (Array.isArray(skills)) user.skills = skills;
+  if (Array.isArray(nonTechnicalSkills)) user.nonTechnicalSkills = nonTechnicalSkills;
   if (Array.isArray(interests)) user.interests = interests;
   if (Array.isArray(preferredRoles)) user.preferredRoles = preferredRoles;
+  if (typeof preferredDomain === 'string') user.preferredDomain = preferredDomain.trim();
+  if (typeof careerGoals === 'string') user.careerGoals = careerGoals.trim();
   if (Array.isArray(projects)) user.projects = projects;
   if (githubUrl !== undefined) user.githubUrl = githubUrl;
   if (linkedinUrl !== undefined) user.linkedinUrl = linkedinUrl;
@@ -3185,86 +3226,112 @@ app.post('/api/admin/reported-jobs/:id/action', requireAdmin, (req: Request, res
 // 1. OPPORTUNITIES & INTERNSHIPS API
 // ------------------------------------------
 
+function resolveOpportunitySourceLabel(sourceName: string): string {
+  const lower = String(sourceName || '').toLowerCase();
+  if (lower.includes('aicte')) return 'AICTE Portal';
+  if (lower.includes('ncs') || lower.includes('national career')) return 'National Career Service (NCS)';
+  if (lower.includes('indianapi')) return 'IndianAPI Jobs';
+  if (lower.includes('arbeitnow')) return 'Arbeitnow';
+  if (lower.includes('remotive')) return 'Remotive';
+  if (lower.includes('firestore')) return 'Firestore Verified';
+  return sourceName || 'Verified Partner';
+}
+
 function mapInternshipToJobRecord(internship: InternshipListing): JobRecord {
+  const sourceLabel = resolveOpportunitySourceLabel(internship.sourceName);
+  const posted = internship.createdAt ? String(internship.createdAt).split('T')[0] : 'Active Opening';
   return {
     id: internship.id,
     title: internship.title,
     company: internship.companyName,
-    companyLogo: internship.isGovernmentScheme
-      ? 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?auto=format&fit=crop&w=120&q=80'
-      : 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=120&q=80',
+    companyLogo:
+      internship.companyLogo ||
+      (internship.isGovernmentScheme
+        ? 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?auto=format&fit=crop&w=120&q=80'
+        : `https://ui-avatars.com/api/?name=${encodeURIComponent(internship.companyName)}&background=0284C7&color=fff`),
     creatorRole: 'admin',
     location: internship.location,
     city: internship.location.split(',')[0].trim() || 'India',
     coordinates: resolveIndianCityCoordinates(internship.location),
     type: internship.workMode === 'Remote' ? 'remote' : 'internship',
-    category: 'Government',
-    stipend: internship.stipend,
-    stipendAmount: 15000,
-    duration: internship.duration,
-    requiredSkills: internship.skills,
+    category: internship.category || (internship.isGovernmentScheme ? 'Government' : 'Tech'),
+    stipend: internship.stipend || '',
+    stipendAmount: parseCompensationAmount(internship.stipend),
+    duration: internship.duration || 'Internship',
+    requiredSkills: internship.skills || [],
     eligibility: internship.eligibility,
     description: internship.description,
-    responsibilities: [
-      'Deliver project goals under verified mentorship from organizing department',
-      'Maintain daily logs, review sprint deliverables, and present milestone reports',
-      'Follow workplace ethics, safety guidelines, and statutory documentation'
-    ],
-    perks: ['Official Experience Certificate', 'Government Mission Accreditation', 'Pre-Placement Opportunity'],
-    deadline: internship.applicationDeadline,
+    responsibilities: [],
+    perks: [],
+    deadline: internship.applicationDeadline || 'Open',
     applicantsCount: 0,
-    postedDate: 'Verified Scheme',
+    postedDate: posted,
     isVerified: internship.verifiedStatus === 'Verified',
     verificationStatus: internship.verifiedStatus === 'Verified' ? 'approved' : 'pending',
-    verificationEvidence: `${internship.sourceName} Verified`,
-    opportunitySource: internship.sourceName.includes('AICTE') ? 'AICTE Portal' : 'Verified Partner',
+    verificationEvidence: `Source: ${sourceLabel}`,
+    opportunitySource: sourceLabel,
+    originalUrl: internship.applyUrl,
     externalSourceUrl: internship.applyUrl,
+    dateVerified: internship.lastVerifiedAt ? String(internship.lastVerifiedAt).split('T')[0] : undefined,
     isGovernmentSponsored: Boolean(internship.isGovernmentScheme),
   };
 }
 
 function mapExternalJobToJobRecord(job: JobListing): JobRecord {
+  const sourceLabel = resolveOpportunitySourceLabel(job.sourceName);
+  const posted = job.createdAt ? String(job.createdAt).split('T')[0] : 'Active Opening';
   return {
     id: job.id,
     title: job.title,
     company: job.companyName,
-    companyLogo: 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=120&q=80',
+    companyLogo:
+      job.companyLogo ||
+      `https://ui-avatars.com/api/?name=${encodeURIComponent(job.companyName)}&background=0F172A&color=fff`,
     creatorRole: 'admin',
     location: job.location,
-    city: job.location.split(',')[0].trim() || 'India',
+    city: job.location.split(',')[0].trim() || 'Remote',
     coordinates: resolveIndianCityCoordinates(job.location),
-    type: job.workMode === 'Remote' ? 'remote' : (job.employmentType === 'Internship' ? 'internship' : 'full-time'),
-    category: 'Tech',
-    stipend: job.salary,
-    stipendAmount: 25000,
-    duration: 'Full-Time Employment',
-    requiredSkills: job.requiredSkills,
+    type: job.workMode === 'Remote' ? 'remote' : (job.employmentType === 'Internship' ? 'internship' : (job.employmentType === 'Part-time' ? 'part-time' : 'full-time')),
+    category: job.category || 'Tech',
+    stipend: job.salary || '',
+    stipendAmount: parseCompensationAmount(job.salary),
+    duration: job.employmentType || 'Full-time',
+    requiredSkills: job.requiredSkills || [],
     description: job.description,
-    responsibilities: [
-      'Execute technical deliverables in accordance with engineering team goals',
-      'Participate in code reviews, testing protocols, and client deliveries',
-      'Document system design specifications and maintain operational uptime'
-    ],
-    perks: ['Performance Bonus', 'Standard Health & Group Insurance', 'Rapid Career Advancement'],
-    deadline: '2026-12-31',
+    responsibilities: [],
+    perks: [],
+    deadline: 'Open',
     applicantsCount: 0,
-    postedDate: 'Active Opening',
+    postedDate: posted,
     isVerified: job.verifiedStatus === 'Verified',
     verificationStatus: job.verifiedStatus === 'Verified' ? 'approved' : 'pending',
-    verificationEvidence: `${job.sourceName} Verified`,
-    opportunitySource: job.sourceName.includes('NCS') || job.sourceName.includes('National Career Service')
-      ? 'National Career Service (NCS)'
-      : 'Verified Partner',
+    verificationEvidence: `Source: ${sourceLabel}`,
+    opportunitySource: sourceLabel,
+    originalUrl: job.applyUrl,
     externalSourceUrl: job.applyUrl,
+    dateVerified: job.lastVerifiedAt ? String(job.lastVerifiedAt).split('T')[0] : undefined,
     isGovernmentSponsored: job.sourceName.includes('NCS') || job.sourceName.includes('National Career Service'),
   };
 }
 
 // Fetch Opportunities (Returns approved opportunities, plus live synced external listings)
-app.get('/api/opportunities', (req: Request, res: Response) => {
+app.get('/api/opportunities', async (req: Request, res: Response) => {
   try {
-    const { category, type, search, collegeId, creatorId, showAll } = req.query;
-    
+    await syncEngine.ensureInitialSync().catch(() => {});
+    const {
+      category,
+      type,
+      search,
+      collegeId,
+      creatorId,
+      showAll,
+      source,
+      skills,
+      education,
+      interests,
+      preferredLocation,
+    } = req.query;
+
     // Base database listings
     let list = [...jobsDatabase];
 
@@ -3273,7 +3340,7 @@ app.get('/api/opportunities', (req: Request, res: Response) => {
       list = list.filter(j => j.verificationStatus === 'approved' || (creatorId && j.creatorId === creatorId));
     }
 
-    // Merge active verified listings from SyncEngine
+    // Merge active verified listings from SyncEngine (Arbeitnow, Remotive, & any configured adapters)
     const externalInternships = syncEngine.getInternships().map(mapInternshipToJobRecord);
     const externalJobs = syncEngine.getJobs().map(mapExternalJobToJobRecord);
     const combined = [...list, ...externalInternships, ...externalJobs];
@@ -3286,6 +3353,11 @@ app.get('/api/opportunities', (req: Request, res: Response) => {
         seenIds.add(item.id);
         uniqueList.push(item);
       }
+    }
+
+    if (source && source !== 'All') {
+      const s = String(source).toLowerCase();
+      uniqueList = uniqueList.filter(j => (j.opportunitySource || '').toLowerCase().includes(s));
     }
 
     if (category && category !== 'All') {
@@ -3302,12 +3374,29 @@ app.get('/api/opportunities', (req: Request, res: Response) => {
 
     if (search) {
       const q = String(search).toLowerCase();
-      uniqueList = uniqueList.filter(j => 
+      uniqueList = uniqueList.filter(j =>
         j.title.toLowerCase().includes(q) ||
         j.company.toLowerCase().includes(q) ||
         j.location.toLowerCase().includes(q) ||
+        j.description.toLowerCase().includes(q) ||
         j.requiredSkills.some(s => s.toLowerCase().includes(q))
       );
+    }
+
+    // Optional server-side filtering by student skills, education, interests & location
+    if (skills || education || interests || preferredLocation) {
+      const profileCriteria = {
+        skills: skills ? String(skills).split(',').map(s => s.trim()).filter(Boolean) : [],
+        education: education ? String(education) : '',
+        interests: interests ? String(interests).split(',').map(s => s.trim()).filter(Boolean) : [],
+        preferredLocation: preferredLocation ? String(preferredLocation) : '',
+        location: preferredLocation ? String(preferredLocation) : '',
+      };
+      uniqueList = uniqueList
+        .map(job => ({ job, match: matchJobWithStudentProfile(job as unknown as Job, profileCriteria) }))
+        .filter(entry => entry.match.matches)
+        .sort((a, b) => b.match.relevanceScore - a.match.relevanceScore)
+        .map(entry => entry.job);
     }
 
     return res.json({ success: true, jobs: uniqueList });
@@ -3320,12 +3409,14 @@ app.get('/api/opportunities', (req: Request, res: Response) => {
 // AUTOMATIC DATA INTEGRATION ENDPOINTS
 // ------------------------------------------
 
-// 1. Get Genuine Internships (AICTE & Verified Partners)
-app.get('/api/external/internships', (req: Request, res: Response) => {
+// 1. Get Genuine Internships (Arbeitnow, Remotive, AICTE & Verified Partners)
+app.get('/api/external/internships', async (req: Request, res: Response) => {
   try {
-    const { keyword, location, workMode, includeExpired } = req.query;
+    await syncEngine.ensureInitialSync().catch(() => {});
+    const { keyword, search, source, location, workMode, includeExpired } = req.query;
     const items = syncEngine.getInternships({
-      keyword: keyword ? String(keyword) : undefined,
+      keyword: (keyword || search) ? String(keyword || search) : undefined,
+      source: source ? String(source) : undefined,
       location: location ? String(location) : undefined,
       workMode: workMode ? String(workMode) : undefined,
       includeExpired: includeExpired === 'true'
@@ -3336,15 +3427,17 @@ app.get('/api/external/internships', (req: Request, res: Response) => {
   }
 });
 
-// 2. Get Genuine Jobs (IndianAPI & NCS)
-app.get('/api/external/jobs', (req: Request, res: Response) => {
+// 2. Get Genuine Jobs (Arbeitnow, Remotive, IndianAPI & NCS)
+app.get('/api/external/jobs', async (req: Request, res: Response) => {
   try {
-    const { keyword, location, workMode, employmentType, includeExpired } = req.query;
+    await syncEngine.ensureInitialSync().catch(() => {});
+    const { keyword, search, source, location, workMode, employmentType, type, includeExpired } = req.query;
     const items = syncEngine.getJobs({
-      keyword: keyword ? String(keyword) : undefined,
+      keyword: (keyword || search) ? String(keyword || search) : undefined,
+      source: source ? String(source) : undefined,
       location: location ? String(location) : undefined,
       workMode: workMode ? String(workMode) : undefined,
-      employmentType: employmentType ? String(employmentType) : undefined,
+      employmentType: (employmentType || type) ? String(employmentType || type) : undefined,
       includeExpired: includeExpired === 'true'
     });
     return res.json({ success: true, count: items.length, jobs: items });
@@ -3398,140 +3491,205 @@ app.post('/api/external/sources/:id/toggle', requireAdmin, (req: Request, res: R
   }
 });
 
-// 7. Personalized Recommendations for Student
+// 7. Personalized Recommendations for Student (40/25/20/10/5 Weighted AI Matching + Skill Gap Analysis)
 app.post('/api/external/recommendations', async (req: Request, res: Response) => {
   try {
-    const { studentProfile, limit = 4 } = req.body;
-    const maxItems = Math.min(Math.max(Number(limit) || 4, 1), 12);
-    const allInternships = syncEngine.getInternships();
-    const allJobs = syncEngine.getJobs();
-    const approvedCatalog = jobsDatabase
-      .filter(j => j.verificationStatus === 'approved')
-      .map(j => ({
-        id: j.id,
-        jobId: j.id,
-        title: j.title,
-        company: j.company,
-        companyName: j.company,
-        type: j.type || 'Internship',
-        location: j.location,
-        skills: j.requiredSkills || [],
-        stipend: j.stipend,
-        stipendOrSalary: j.stipend,
-        deadline: j.deadline || 'Active Opening',
-        source: j.opportunitySource || 'YuvaMitraa Verified',
-        sourceName: j.opportunitySource || 'YuvaMitraa Verified',
-        applyUrl: j.externalSourceUrl || '',
-        originalUrl: j.externalSourceUrl || ''
-      }));
+    await syncEngine.ensureInitialSync().catch(() => {});
+    const { studentProfile, firestoreInternships = [], limit = 8 } = req.body;
+    const maxItems = Math.min(Math.max(Number(limit) || 8, 1), 20);
 
-    const genuineOpportunities = [
+    const allInternships = syncEngine.getInternships();
+    const externalInternshipJobs = syncEngine
+      .getJobs()
+      .filter(j => j.employmentType === 'Internship' || /intern|trainee|fellow|apprentice|junior|entry/i.test(j.title));
+
+    const mapExternalMode = (wm?: string): 'Online' | 'Offline' | 'Hybrid' => {
+      if (wm === 'Remote') return 'Online';
+      if (wm === 'Hybrid') return 'Hybrid';
+      return 'Offline';
+    };
+
+    const externalCandidates: UnifiedInternshipCandidate[] = [
       ...allInternships.map(i => ({
         id: i.id,
         jobId: i.id,
         title: i.title,
-        company: i.companyName,
         companyName: i.companyName,
-        type: 'Internship',
-        location: i.location,
-        skills: i.skills || [],
-        stipend: i.stipend,
-        stipendOrSalary: i.stipend,
-        deadline: i.applicationDeadline,
-        source: i.sourceName,
+        description: i.description || '',
+        category: i.category || (i.isGovernmentScheme ? 'Government' : 'Tech'),
+        type: 'internship',
+        requiredSkills: i.skills || [],
+        eligibility: i.eligibility || 'Open to eligible students',
+        stipend: i.stipend || '',
+        duration: i.duration || 'Internship',
+        workMode: mapExternalMode(i.workMode),
+        location: i.location || 'Remote',
+        applicationDeadline: i.applicationDeadline || 'Open',
+        applyUrl: i.applyUrl || i.sourceUrl || '',
         sourceName: i.sourceName,
-        applyUrl: i.applyUrl,
-        originalUrl: i.applyUrl
+        isVerified: i.verifiedStatus === 'Verified',
+        isGovernmentSponsored: Boolean(i.isGovernmentScheme),
+        verifiedStatus: i.verifiedStatus,
       })),
-      ...allJobs.map(j => ({
+      ...externalInternshipJobs.map(j => ({
         id: j.id,
         jobId: j.id,
         title: j.title,
-        company: j.companyName,
         companyName: j.companyName,
-        type: j.employmentType,
-        location: j.location,
-        skills: j.requiredSkills || [],
-        stipend: j.salary,
-        stipendOrSalary: j.salary,
-        deadline: 'Active Opening',
-        source: j.sourceName,
+        description: j.description || '',
+        category: j.category || 'Tech',
+        type: 'internship',
+        requiredSkills: j.requiredSkills || [],
+        eligibility: 'Open to eligible students & early-career applicants',
+        stipend: j.salary || '',
+        duration: j.employmentType || 'Role',
+        workMode: mapExternalMode(j.workMode),
+        location: j.location || 'Remote',
+        applicationDeadline: 'Open',
+        applyUrl: j.applyUrl || j.sourceUrl || '',
         sourceName: j.sourceName,
-        applyUrl: j.applyUrl,
-        originalUrl: j.applyUrl
+        isVerified: j.verifiedStatus === 'Verified',
+        isGovernmentSponsored: j.sourceName.includes('NCS') || j.sourceName.includes('National Career Service'),
+        verifiedStatus: j.verifiedStatus,
       })),
-      ...approvedCatalog,
     ];
 
-    if (!studentProfile || genuineOpportunities.length === 0) {
-      return res.json({ success: true, recommendations: [] });
+    const firestoreCandidates: UnifiedInternshipCandidate[] = Array.isArray(firestoreInternships)
+      ? firestoreInternships
+          .filter((item: any) => item && item.verifiedStatus === 'Verified' && item.title && item.companyName)
+          .map((item: any) => ({
+            id: String(item.id),
+            jobId: String(item.id),
+            title: String(item.title),
+            companyName: String(item.companyName),
+            description: String(item.description || ''),
+            category: item.isGovernmentScheme ? 'Government' : 'Tech',
+            type: 'internship',
+            requiredSkills: Array.isArray(item.skills) ? item.skills.map(String) : [],
+            eligibility: String(item.eligibility || 'Open to eligible students'),
+            stipend: String(item.stipend || ''),
+            duration: String(item.duration || 'Internship'),
+            workMode: mapExternalMode(item.workMode),
+            location: String(item.location || 'India'),
+            applicationDeadline: String(item.applicationDeadline || 'Active Opening'),
+            applyUrl: String(item.applyUrl || item.sourceUrl || ''),
+            sourceName: String(item.sourceName || 'Verified Partner'),
+            isVerified: true,
+            isGovernmentSponsored: Boolean(item.isGovernmentScheme),
+            verifiedStatus: 'Verified',
+          }))
+      : [];
+
+    const platformCandidates: UnifiedInternshipCandidate[] = jobsDatabase
+      .filter(j => j.verificationStatus === 'approved' && (j.type === 'internship' || j.type === 'remote' || /intern|trainee|fellow/i.test(j.title)))
+      .map(j => jobToCandidate(j as unknown as Job));
+
+    const allCandidates = [...externalCandidates, ...firestoreCandidates, ...platformCandidates];
+
+    const sourceStatus = {
+      externalApiCount: externalCandidates.length,
+      firestoreCount: firestoreCandidates.length,
+      platformVerifiedCount: platformCandidates.length,
+      externalUnavailable: externalCandidates.length === 0,
+      totalVerifiedCount: allCandidates.length,
+    };
+
+    if (!studentProfile || allCandidates.length === 0) {
+      return res.json({
+        success: true,
+        recommendations: [],
+        overallMissingSkills: [],
+        topSkillGapResources: [],
+        beginnerFriendlyCount: 0,
+        profileSignature: '',
+        sourceStatus,
+      });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(503).json({ error: 'Gemini AI API key is not configured on the server.' });
-    }
+    const ranked = rankInternshipsForStudent(studentProfile, allCandidates, maxItems);
 
-    const promptCatalog = genuineOpportunities.map(o => ({
-      id: o.id,
-      title: o.title,
-      company: o.company,
-      type: o.type,
-      location: o.location,
-      skills: (o.skills || []).slice(0, 8),
-      stipend: o.stipend,
-      source: o.source,
-    }));
+    // Optional Gemini enrichment strictly for personalized "Why this internship matches you" narrative (non-blocking)
+    if (process.env.GEMINI_API_KEY && ranked.recommendations.length > 0) {
+      try {
+        const promptItems = ranked.recommendations.slice(0, 6).map(r => ({
+          id: r.internshipId,
+          title: r.title,
+          companyName: r.companyName,
+          matchScore: r.matchScore,
+          matchedSkills: r.matchedSkills,
+          missingSkills: r.missingSkills,
+          breakdown: r.breakdown,
+          location: r.location,
+          workMode: r.workMode,
+          eligibility: r.eligibility,
+        }));
 
-    const prompt = `You are the YuvaMitraa Career Recommendation Engine.
-Analyze this student profile:
-- Education: ${studentProfile.education || 'Undergraduate'}
-- Branch / Specialization: ${studentProfile.branch || 'Engineering / Technology'}
-- Skills: ${(studentProfile.skills || []).join(', ')}
-- Location: ${studentProfile.location || 'India'}
-- Career Interests: ${(studentProfile.interests || []).join(', ')}
+        const aiPrompt = `You are the YuvaMitraa AI Career Advisor.
+Write concise, personalized 1-2 sentence explanations ("why it matches") for why each verified internship fits this specific student.
 
-Available genuine opportunities (DO NOT INVENT ANY OPPORTUNITY NOT IN THIS LIST):
-${JSON.stringify(promptCatalog)}
+Student Profile:
+- Name: ${studentProfile.name || 'Student'}
+- Education: ${studentProfile.education || ''} | Course: ${studentProfile.course || ''} | Branch: ${studentProfile.branch || ''} | Semester/Year: ${studentProfile.studyYear || ''}
+- Technical Skills: ${(studentProfile.skills || []).join(', ') || 'None specified yet'}
+- Non-Technical Skills: ${(studentProfile.nonTechnicalSkills || []).join(', ') || 'None specified'}
+- Areas of Interest: ${(studentProfile.interests || []).join(', ') || 'General'}
+- Preferred Domain: ${studentProfile.preferredDomain || 'Open'}
+- Career Goals: ${studentProfile.careerGoals || 'Industry internship readiness'}
+- Preferred Location: ${studentProfile.preferredLocation || studentProfile.location || 'India'}
+- Work Mode Preference: ${studentProfile.workModePreference || 'Any'}
 
-Rank the top ${maxItems} most suitable genuine opportunities for this student.
-For each opportunity, calculate an honest match percentage (between 50 and 99) and provide a 1-sentence specific match reason based strictly on their skills and branch.`;
+Verified Ranked Matches (DO NOT alter matchScore or invent companies/skills):
+${JSON.stringify(promptItems)}
 
-    const response = await generateContentWithRetry(
-      {
-        model: 'gemini-4-hydrogen',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.STRING },
-                matchScore: { type: Type.NUMBER },
-                matchReason: { type: Type.STRING },
+For each internship ID, write an encouraging, concrete "matchReason" referencing the student's actual matched skills, branch/interest, location preference, and mention missing skills (if any) they can bridge.`;
+
+        const aiResponse = await generateContentWithRetry(
+          {
+            model: 'gemini-4-hydrogen',
+            contents: aiPrompt,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    matchReason: { type: Type.STRING },
+                  },
+                },
               },
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
             },
           },
-          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-        }
-      },
-      45000,
-      'Recommendations'
-    );
+          15000,
+          'RecommendationNarrative'
+        );
 
-    const parsed = cleanAndParseJSON(response.text || '[]');
-    if (!Array.isArray(parsed)) {
-      return res.status(502).json({ error: 'Invalid AI recommendation format received.' });
+        const parsedReasons = cleanAndParseJSON(aiResponse.text || '[]');
+        if (Array.isArray(parsedReasons)) {
+          for (const rec of ranked.recommendations) {
+            const enriched = parsedReasons.find((p: any) => p?.id === rec.internshipId && typeof p?.matchReason === 'string' && p.matchReason.trim());
+            if (enriched) {
+              rec.matchReason = enriched.matchReason.trim();
+            }
+          }
+        }
+      } catch (aiErr: any) {
+        console.warn('[Recommendations] Gemini explanation enrichment skipped (using deterministic grounded reasons):', aiErr?.message || aiErr);
+      }
     }
 
-    const enriched = parsed.map((rec: any) => {
-      const opp = genuineOpportunities.find(o => o.id === (rec.id || rec.jobId));
-      if (!opp) return null;
-      return { ...opp, matchScore: rec.matchScore, matchReason: rec.matchReason };
-    }).filter(Boolean).slice(0, maxItems);
-
-    return res.json({ success: true, recommendations: enriched });
+    return res.json({
+      success: true,
+      recommendations: ranked.recommendations,
+      overallMissingSkills: ranked.overallMissingSkills,
+      topSkillGapResources: ranked.topSkillGapResources,
+      beginnerFriendlyCount: ranked.beginnerFriendlyCount,
+      profileSignature: ranked.profileSignature,
+      sourceStatus,
+      updatedAt: new Date().toISOString(),
+    });
   } catch (err: any) {
     return sendAiError(res, err, 'Failed to generate AI recommendations.');
   }

@@ -1,31 +1,36 @@
-import { 
-  InternshipListing, 
-  JobListing, 
-  DataSyncLog, 
-  SourceAdapterInfo, 
-  VerifiedStatus 
+import {
+  InternshipListing,
+  JobListing,
+  DataSyncLog,
+  SourceAdapterInfo,
 } from '../../types';
 import { IDataSourceAdapter, AdapterSyncResult } from './types';
 import { AicteInternshipAdapter } from './adapters/AicteAdapter';
 import { IndianApiJobsAdapter } from './adapters/IndianApiJobsAdapter';
 import { NcsPortalAdapter } from './adapters/NcsAdapter';
+import { ArbeitnowAdapter } from './adapters/ArbeitnowAdapter';
+import { RemotiveAdapter } from './adapters/RemotiveAdapter';
 
 export class SyncEngine {
   private static instance: SyncEngine;
 
   private adapters: Map<string, IDataSourceAdapter> = new Map();
   private enabledSources: Set<string> = new Set();
-  
+
   // Storage caches
   private internships: Map<string, InternshipListing> = new Map();
   private jobs: Map<string, JobListing> = new Map();
   private syncLogs: DataSyncLog[] = [];
+  private lastFetchTimestamp: Map<string, number> = new Map();
 
-  // Interval timer
+  // Interval & initial sync coordination
   private timer: NodeJS.Timeout | null = null;
   private isSyncing = false;
+  private initialSyncPromise: Promise<AdapterSyncResult[]> | null = null;
 
   private constructor() {
+    this.registerAdapter(new ArbeitnowAdapter());
+    this.registerAdapter(new RemotiveAdapter());
     this.registerAdapter(new AicteInternshipAdapter());
     this.registerAdapter(new IndianApiJobsAdapter());
     this.registerAdapter(new NcsPortalAdapter());
@@ -54,9 +59,10 @@ export class SyncEngine {
     const intervalMs = Math.max(1, intervalHours) * 60 * 60 * 1000;
     console.info(`[SyncEngine] Starting scheduled data refresh every ${intervalHours} hours.`);
 
-    // Run initial sync asynchronously
-    this.runSyncAll().catch((err) => {
+    // Run initial sync asynchronously and retain promise so early API callers can await it
+    this.initialSyncPromise = this.runSyncAll().catch((err) => {
       console.warn(`[SyncEngine] Initial sync error: ${err.message}`);
+      return [];
     });
 
     this.timer = setInterval(() => {
@@ -66,11 +72,38 @@ export class SyncEngine {
     }, intervalMs);
   }
 
+  public async ensureInitialSync(): Promise<void> {
+    if (this.initialSyncPromise) {
+      await this.initialSyncPromise;
+    }
+  }
+
   public stopScheduledSync() {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * Respect public API rate limits (e.g., Remotive advises <= 4 requests/day).
+   * Returns a minimum cooldown in milliseconds when cache already contains records.
+   */
+  private getAdapterCooldownMs(adapterId: string): number {
+    if (adapterId === 'remotive_jobs') return 15 * 60 * 1000; // 15 min minimum between manual re-fetches if cached
+    if (adapterId === 'arbeitnow_jobs') return 5 * 60 * 1000; // 5 min minimum between manual re-fetches if cached
+    return 0;
+  }
+
+  private getCachedCountForAdapter(adapterName: string): number {
+    let count = 0;
+    for (const i of this.internships.values()) {
+      if (i.sourceName === adapterName) count++;
+    }
+    for (const j of this.jobs.values()) {
+      if (j.sourceName === adapterName) count++;
+    }
+    return count;
   }
 
   /**
@@ -113,7 +146,6 @@ export class SyncEngine {
 
       // Detect and mark expired listings across all collections
       this.detectAndMarkExpired();
-
     } finally {
       this.isSyncing = false;
     }
@@ -125,10 +157,35 @@ export class SyncEngine {
    * Synchronize an individual source adapter
    */
   public async syncSource(adapter: IDataSourceAdapter): Promise<AdapterSyncResult> {
+    const cooldownMs = this.getAdapterCooldownMs(adapter.id);
+    const lastTs = this.lastFetchTimestamp.get(adapter.id) || 0;
+    const cachedCount = this.getCachedCountForAdapter(adapter.name);
+
+    if (cooldownMs > 0 && cachedCount > 0 && Date.now() - lastTs < cooldownMs) {
+      const waitMins = Math.ceil((cooldownMs - (Date.now() - lastTs)) / 60000);
+      const cachedResult: AdapterSyncResult = {
+        sourceName: adapter.name,
+        sourceId: adapter.id,
+        status: 'SUCCESS',
+        fetchedCount: cachedCount,
+        insertedCount: 0,
+        updatedCount: cachedCount,
+        duplicateCount: 0,
+        expiredCount: 0,
+        errorMessage: `Serving ${cachedCount} cached ${adapter.name} listings to respect public API rate limits (next live fetch allowed in ~${waitMins} min).`,
+      };
+      this.recordSyncLog(cachedResult);
+      return cachedResult;
+    }
+
     const rawResult = await adapter.fetchAndNormalize();
     let inserted = 0;
     let updated = 0;
     let duplicate = 0;
+
+    if (rawResult.status === 'SUCCESS') {
+      this.lastFetchTimestamp.set(adapter.id, Date.now());
+    }
 
     // 1. Process Internships if returned
     if (rawResult.internships && rawResult.internships.length > 0) {
@@ -137,12 +194,12 @@ export class SyncEngine {
         const existing = this.findInternshipByDedupeKey(dedupeKey);
 
         if (existing) {
-          // Update existing item
           existing.updatedAt = new Date().toISOString();
           existing.lastVerifiedAt = item.lastVerifiedAt;
           existing.verifiedStatus = item.verifiedStatus;
-          existing.stipend = item.stipend;
-          existing.applicationDeadline = item.applicationDeadline;
+          if (item.stipend) existing.stipend = item.stipend;
+          if (item.applicationDeadline) existing.applicationDeadline = item.applicationDeadline;
+          if (item.applyUrl) existing.applyUrl = item.applyUrl;
           updated++;
           duplicate++;
         } else {
@@ -162,7 +219,8 @@ export class SyncEngine {
           existing.updatedAt = new Date().toISOString();
           existing.lastVerifiedAt = item.lastVerifiedAt;
           existing.verifiedStatus = item.verifiedStatus;
-          existing.salary = item.salary;
+          if (item.salary) existing.salary = item.salary;
+          if (item.applyUrl) existing.applyUrl = item.applyUrl;
           updated++;
           duplicate++;
         } else {
@@ -200,7 +258,6 @@ export class SyncEngine {
     };
 
     this.syncLogs.unshift(logItem);
-    // Keep max 200 logs
     if (this.syncLogs.length > 200) {
       this.syncLogs.pop();
     }
@@ -212,8 +269,8 @@ export class SyncEngine {
   private detectAndMarkExpired() {
     const today = new Date().toISOString().split('T')[0];
 
-    for (const [id, item] of this.internships.entries()) {
-      if (item.applicationDeadline && item.applicationDeadline < today) {
+    for (const item of this.internships.values()) {
+      if (item.applicationDeadline && /^\d{4}-\d{2}-\d{2}$/.test(item.applicationDeadline) && item.applicationDeadline < today) {
         if (item.verifiedStatus !== 'Expired') {
           item.verifiedStatus = 'Expired';
           item.updatedAt = new Date().toISOString();
@@ -247,6 +304,7 @@ export class SyncEngine {
   // Public Query APIs
   public getInternships(options?: {
     keyword?: string;
+    source?: string;
     location?: string;
     workMode?: string;
     includeExpired?: boolean;
@@ -254,25 +312,32 @@ export class SyncEngine {
     let list = Array.from(this.internships.values());
 
     if (!options?.includeExpired) {
-      list = list.filter(i => i.verifiedStatus !== 'Expired' && i.verifiedStatus !== 'Rejected');
+      list = list.filter((i) => i.verifiedStatus !== 'Expired' && i.verifiedStatus !== 'Rejected');
+    }
+
+    if (options?.source && options.source !== 'All') {
+      const s = options.source.toLowerCase();
+      list = list.filter((i) => i.sourceName.toLowerCase().includes(s));
     }
 
     if (options?.keyword) {
       const q = options.keyword.toLowerCase();
-      list = list.filter(i => 
-        i.title.toLowerCase().includes(q) ||
-        i.companyName.toLowerCase().includes(q) ||
-        i.skills.some(s => s.toLowerCase().includes(q))
+      list = list.filter(
+        (i) =>
+          i.title.toLowerCase().includes(q) ||
+          i.companyName.toLowerCase().includes(q) ||
+          i.description.toLowerCase().includes(q) ||
+          i.skills.some((s) => s.toLowerCase().includes(q))
       );
     }
 
     if (options?.location && options.location !== 'All') {
       const loc = options.location.toLowerCase();
-      list = list.filter(i => i.location.toLowerCase().includes(loc));
+      list = list.filter((i) => i.location.toLowerCase().includes(loc));
     }
 
     if (options?.workMode && options.workMode !== 'All') {
-      list = list.filter(i => i.workMode.toLowerCase() === options.workMode?.toLowerCase());
+      list = list.filter((i) => i.workMode.toLowerCase() === options.workMode?.toLowerCase());
     }
 
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -280,6 +345,7 @@ export class SyncEngine {
 
   public getJobs(options?: {
     keyword?: string;
+    source?: string;
     location?: string;
     employmentType?: string;
     workMode?: string;
@@ -288,25 +354,37 @@ export class SyncEngine {
     let list = Array.from(this.jobs.values());
 
     if (!options?.includeExpired) {
-      list = list.filter(j => j.verifiedStatus !== 'Expired' && j.verifiedStatus !== 'Rejected');
+      list = list.filter((j) => j.verifiedStatus !== 'Expired' && j.verifiedStatus !== 'Rejected');
+    }
+
+    if (options?.source && options.source !== 'All') {
+      const s = options.source.toLowerCase();
+      list = list.filter((j) => j.sourceName.toLowerCase().includes(s));
     }
 
     if (options?.keyword) {
       const q = options.keyword.toLowerCase();
-      list = list.filter(j => 
-        j.title.toLowerCase().includes(q) ||
-        j.companyName.toLowerCase().includes(q) ||
-        j.requiredSkills.some(s => s.toLowerCase().includes(q))
+      list = list.filter(
+        (j) =>
+          j.title.toLowerCase().includes(q) ||
+          j.companyName.toLowerCase().includes(q) ||
+          j.description.toLowerCase().includes(q) ||
+          j.requiredSkills.some((s) => s.toLowerCase().includes(q))
       );
     }
 
     if (options?.location && options.location !== 'All') {
       const loc = options.location.toLowerCase();
-      list = list.filter(j => j.location.toLowerCase().includes(loc));
+      list = list.filter((j) => j.location.toLowerCase().includes(loc));
+    }
+
+    if (options?.employmentType && options.employmentType !== 'All') {
+      const et = options.employmentType.toLowerCase();
+      list = list.filter((j) => j.employmentType.toLowerCase() === et);
     }
 
     if (options?.workMode && options.workMode !== 'All') {
-      list = list.filter(j => j.workMode.toLowerCase() === options.workMode?.toLowerCase());
+      list = list.filter((j) => j.workMode.toLowerCase() === options.workMode?.toLowerCase());
     }
 
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -316,13 +394,8 @@ export class SyncEngine {
     const infos: SourceAdapterInfo[] = [];
 
     for (const [id, adapter] of this.adapters.entries()) {
-      const lastLog = this.syncLogs.find(l => l.sourceName === adapter.name);
-      let count = 0;
-      if (adapter.type === 'internship') {
-        count = Array.from(this.internships.values()).filter(i => i.sourceName === adapter.name).length;
-      } else {
-        count = Array.from(this.jobs.values()).filter(j => j.sourceName === adapter.name).length;
-      }
+      const lastLog = this.syncLogs.find((l) => l.sourceName === adapter.name);
+      const count = this.getCachedCountForAdapter(adapter.name);
 
       const info = adapter.getInfo(count, lastLog?.lastSyncAt || new Date().toISOString());
       info.enabled = this.enabledSources.has(id);

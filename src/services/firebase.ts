@@ -18,25 +18,30 @@ import {
 import { 
   getFirestore, 
   initializeFirestore,
+  collection,
   doc, 
   getDoc, 
+  getDocs,
+  query,
+  where,
   setDoc, 
   updateDoc, 
   deleteDoc,
   getDocFromServer 
 } from 'firebase/firestore';
 import defaultFirebaseConfig from '../../firebase-applet-config.json';
+import { InternshipListing, StudentRecommendationBundle } from '../types';
 
-// Read Firebase configuration from environment variables with fallback to firebase-applet-config.json
+// Use provisioned firebase-applet-config.json as authoritative configuration (fallback to VITE_FIREBASE_* if unset)
 export const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || defaultFirebaseConfig.apiKey,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || defaultFirebaseConfig.authDomain,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || defaultFirebaseConfig.projectId,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || defaultFirebaseConfig.storageBucket,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || defaultFirebaseConfig.messagingSenderId,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || defaultFirebaseConfig.appId,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || defaultFirebaseConfig.measurementId,
-  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || defaultFirebaseConfig.firestoreDatabaseId,
+  apiKey: defaultFirebaseConfig.apiKey || import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: defaultFirebaseConfig.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: defaultFirebaseConfig.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: defaultFirebaseConfig.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: defaultFirebaseConfig.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: defaultFirebaseConfig.appId || import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: defaultFirebaseConfig.measurementId || import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
+  firestoreDatabaseId: defaultFirebaseConfig.firestoreDatabaseId || import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID,
 };
 
 // Initialize Firebase App once
@@ -556,6 +561,9 @@ export async function syncUserProfileToFirestore(
       ['currentRole', 160],
       ['yearsOfExperience', 64],
       ['location', 160],
+      ['preferredLocation', 160],
+      ['preferredDomain', 160],
+      ['careerGoals', 500],
       ['githubUrl', 300],
       ['linkedinUrl', 300],
       ['portfolioUrl', 300],
@@ -569,6 +577,14 @@ export async function syncUserProfileToFirestore(
         if (strVal || key in target === false) target[key] = strVal;
       }
     }
+    if (
+      source.workModePreference === 'Online' ||
+      source.workModePreference === 'Offline' ||
+      source.workModePreference === 'Hybrid' ||
+      source.workModePreference === 'Any'
+    ) {
+      target.workModePreference = source.workModePreference;
+    }
     if (typeof source.age === 'number' && source.age >= 13 && source.age <= 120) {
       target.age = source.age;
     }
@@ -580,6 +596,7 @@ export async function syncUserProfileToFirestore(
     }
     const arrayFields: Array<[string, number]> = [
       ['skills', 60],
+      ['nonTechnicalSkills', 40],
       ['interests', 40],
       ['preferredRoles', 30],
       ['badges', 50],
@@ -938,6 +955,392 @@ export async function deleteSavedResumeFromFirestore(uid: string): Promise<void>
     }
     handleFirestoreError(err, OperationType.DELETE, path);
     throw new Error(err?.message || 'Failed to delete saved resume from Firestore.');
+  }
+}
+
+function recommendationsRestUrl(uid: string): string {
+  return `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}/recommendations/current`;
+}
+
+export interface PersistedRecommendationsPayload {
+  userId: string;
+  profileSignature: string;
+  recommendations: any[];
+  overallMissingSkills: string[];
+  updatedAt: string;
+}
+
+function sanitizeRecommendationsForFirestore(
+  uid: string,
+  bundle: Partial<StudentRecommendationBundle>
+): PersistedRecommendationsPayload {
+  const cleanRecs = Array.isArray(bundle.recommendations)
+    ? bundle.recommendations.slice(0, 25).map((r: any) => ({
+        internshipId: String(r.internshipId || r.id || '').slice(0, 128),
+        jobId: String(r.jobId || r.internshipId || '').slice(0, 128),
+        title: String(r.title || '').slice(0, 200),
+        companyName: String(r.companyName || '').slice(0, 200),
+        requiredSkills: Array.isArray(r.requiredSkills) ? r.requiredSkills.map(String).slice(0, 20) : [],
+        eligibility: String(r.eligibility || '').slice(0, 500),
+        stipend: String(r.stipend || '').slice(0, 120),
+        duration: String(r.duration || '').slice(0, 100),
+        workMode: String(r.workMode || 'Online').slice(0, 32),
+        location: String(r.location || '').slice(0, 200),
+        applicationDeadline: String(r.applicationDeadline || '').slice(0, 80),
+        applyUrl: String(r.applyUrl || '').slice(0, 1000),
+        sourceName: String(r.sourceName || '').slice(0, 128),
+        isVerified: Boolean(r.isVerified),
+        matchScore: Number(r.matchScore) || 0,
+        matchTier: String(r.matchTier || 'Good').slice(0, 32),
+        breakdown: {
+          skillsScore: Number(r.breakdown?.skillsScore) || 0,
+          interestScore: Number(r.breakdown?.interestScore) || 0,
+          educationScore: Number(r.breakdown?.educationScore) || 0,
+          careerGoalScore: Number(r.breakdown?.careerGoalScore) || 0,
+          locationPreferenceScore: Number(r.breakdown?.locationPreferenceScore) || 0,
+        },
+        matchReason: String(r.matchReason || '').slice(0, 600),
+        matchedSkills: Array.isArray(r.matchedSkills) ? r.matchedSkills.map(String).slice(0, 20) : [],
+        missingSkills: Array.isArray(r.missingSkills) ? r.missingSkills.map(String).slice(0, 20) : [],
+        suggestedResources: Array.isArray(r.suggestedResources)
+          ? r.suggestedResources.slice(0, 6).map((sr: any) => ({
+              skill: String(sr.skill || '').slice(0, 80),
+              courseId: sr.courseId ? String(sr.courseId).slice(0, 64) : '',
+              courseTitle: String(sr.courseTitle || '').slice(0, 200),
+              provider: String(sr.provider || '').slice(0, 120),
+              duration: sr.duration ? String(sr.duration).slice(0, 64) : '',
+              resourceUrl: sr.resourceUrl ? String(sr.resourceUrl).slice(0, 400) : '',
+              reason: String(sr.reason || '').slice(0, 300),
+            }))
+          : [],
+        isBeginnerFriendly: Boolean(r.isBeginnerFriendly),
+        generatedAt: String(r.generatedAt || new Date().toISOString()).slice(0, 64),
+      }))
+    : [];
+
+  return {
+    userId: uid,
+    profileSignature: String(bundle.profileSignature || 'default').slice(0, 256),
+    recommendations: cleanRecs,
+    overallMissingSkills: Array.isArray(bundle.overallMissingSkills)
+      ? bundle.overallMissingSkills.map((s) => String(s).slice(0, 80)).filter(Boolean).slice(0, 30)
+      : [],
+    updatedAt: String(bundle.updatedAt || new Date().toISOString()).slice(0, 64),
+  };
+}
+
+/**
+ * Save personalized student recommendations privately at users/{uid}/recommendations/current.
+ */
+export async function saveStudentRecommendationsToFirestore(
+  uid: string,
+  bundle: Partial<StudentRecommendationBundle>
+): Promise<PersistedRecommendationsPayload | null> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    return null;
+  }
+
+  const payload = sanitizeRecommendationsForFirestore(uid, bundle);
+  const recRef = doc(db, 'users', uid, 'recommendations', 'current');
+  const path = `users/${uid}/recommendations/current`;
+
+  const writeViaRest = async () => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const res = await fetchWithTimeout(recommendationsRestUrl(uid), {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields: toFirestoreFields(payload) }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST PATCH recommendations failed (${res.status})`);
+    }
+  };
+
+  try {
+    if (preferRestFirestore) {
+      await writeViaRest();
+      return payload;
+    }
+    try {
+      await withSdkTimeout(setDoc(recRef, payload), 'Firestore setDoc recommendations');
+      return payload;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await writeViaRest();
+        return payload;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      console.warn('Firestore recommendations sync skipped:', err?.message || err);
+      return null;
+    }
+    handleFirestoreError(err, OperationType.WRITE, path);
+    return null;
+  }
+}
+
+/**
+ * Load private student recommendations from users/{uid}/recommendations/current.
+ */
+export async function getStudentRecommendationsFromFirestore(
+  uid: string
+): Promise<PersistedRecommendationsPayload | null> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    return null;
+  }
+
+  const recRef = doc(db, 'users', uid, 'recommendations', 'current');
+  const path = `users/${uid}/recommendations/current`;
+
+  const readViaRest = async (): Promise<PersistedRecommendationsPayload | null> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const res = await fetchWithTimeout(recommendationsRestUrl(uid), {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST GET recommendations failed (${res.status})`);
+    }
+    const json = await res.json();
+    const data = fromFirestoreFields(json.fields);
+    if (!data || !Array.isArray(data.recommendations)) return null;
+    return data as PersistedRecommendationsPayload;
+  };
+
+  try {
+    if (preferRestFirestore) {
+      return await readViaRest();
+    }
+    try {
+      const snap = await withSdkTimeout(getDoc(recRef), 'Firestore getDoc recommendations');
+      if (!snap.exists()) return null;
+      const data = snap.data();
+      if (!data || !Array.isArray(data.recommendations)) return null;
+      return data as PersistedRecommendationsPayload;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        return await readViaRest();
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return null;
+    }
+    handleFirestoreError(err, OperationType.GET, path);
+    return null;
+  }
+}
+
+function sanitizeFirestoreInternshipId(rawId: string): string {
+  const cleaned = String(rawId || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .slice(0, 128);
+  return cleaned || `int-${Date.now()}`;
+}
+
+function sanitizeInternshipForFirestore(internship: InternshipListing): InternshipListing {
+  const now = new Date().toISOString();
+  const id = sanitizeFirestoreInternshipId(internship.id);
+  const validModes = ['Remote', 'On-site', 'Hybrid'] as const;
+  const workMode = validModes.includes(internship.workMode as any) ? internship.workMode : 'On-site';
+  const validStatuses = ['Pending verification', 'Verified', 'Expired', 'Rejected', 'Unavailable'] as const;
+  const verifiedStatus = validStatuses.includes(internship.verifiedStatus as any)
+    ? internship.verifiedStatus
+    : 'Verified';
+
+  return {
+    id,
+    title: String(internship.title || '').trim().slice(0, 200),
+    companyName: String(internship.companyName || '').trim().slice(0, 200),
+    description: String(internship.description || '').trim().slice(0, 3000),
+    eligibility: String(internship.eligibility || '').trim().slice(0, 400),
+    skills: Array.isArray(internship.skills)
+      ? internship.skills.map((s) => String(s).trim().slice(0, 60)).filter(Boolean).slice(0, 20)
+      : [],
+    location: String(internship.location || 'India').trim().slice(0, 200),
+    workMode,
+    duration: String(internship.duration || '').trim().slice(0, 100),
+    stipend: String(internship.stipend || '').trim().slice(0, 120),
+    applicationDeadline: String(internship.applicationDeadline || '').trim().slice(0, 64),
+    applyUrl: String(internship.applyUrl || '').trim().slice(0, 1000),
+    sourceName: String(internship.sourceName || 'Firestore Verified').trim().slice(0, 128),
+    sourceUrl: String(internship.sourceUrl || internship.applyUrl || '').trim().slice(0, 1000),
+    sourceId: String(internship.sourceId || id).trim().slice(0, 128),
+    verifiedStatus,
+    lastVerifiedAt: String(internship.lastVerifiedAt || now).slice(0, 64),
+    createdAt: String(internship.createdAt || now).slice(0, 64),
+    updatedAt: now,
+    isGovernmentScheme: Boolean(internship.isGovernmentScheme),
+  };
+}
+
+/**
+ * Read verified internships from Firestore /internships collection (SDK + REST fallback).
+ */
+export async function getVerifiedInternshipsFromFirestore(): Promise<InternshipListing[]> {
+  if (!auth.currentUser) {
+    return [];
+  }
+
+  const path = 'internships';
+
+  const readViaRest = async (): Promise<InternshipListing[]> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/internships?pageSize=100`;
+    const res = await fetchWithTimeout(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (res.status === 404) return [];
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST GET internships failed (${res.status})`);
+    }
+    const json = await res.json();
+    const docs = Array.isArray(json.documents) ? json.documents : [];
+    return docs
+      .map((d: any) => fromFirestoreFields(d.fields) as InternshipListing)
+      .filter((item: InternshipListing) => item && item.verifiedStatus === 'Verified');
+  };
+
+  try {
+    if (preferRestFirestore) {
+      return await readViaRest();
+    }
+    try {
+      const q = query(collection(db, 'internships'), where('verifiedStatus', '==', 'Verified'));
+      const snap = await withSdkTimeout(getDocs(q), 'Firestore getDocs internships');
+      return snap.docs.map((d) => d.data() as InternshipListing);
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        return await readViaRest();
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return [];
+    }
+    handleFirestoreError(err, OperationType.LIST, path);
+    return [];
+  }
+}
+
+/**
+ * Save a verified internship record to Firestore /internships/{id} (admin / employer / college only),
+ * with REST fallback for iframe/proxy resilience.
+ */
+export async function saveVerifiedInternshipToFirestore(
+  internship: InternshipListing
+): Promise<boolean> {
+  if (!auth.currentUser || !internship?.id || !internship?.title || !internship?.companyName) {
+    return false;
+  }
+
+  const clean = sanitizeInternshipForFirestore(internship);
+  const path = `internships/${clean.id}`;
+  const ref = doc(db, 'internships', clean.id);
+
+  const writeViaRest = async (): Promise<void> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/internships/${encodeURIComponent(clean.id)}`;
+    const res = await fetchWithTimeout(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields: toFirestoreFields(clean) }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST PATCH internship failed (${res.status})`);
+    }
+  };
+
+  try {
+    if (preferRestFirestore) {
+      await writeViaRest();
+      return true;
+    }
+    try {
+      await withSdkTimeout(setDoc(ref, clean), 'Firestore setDoc internship');
+      return true;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await writeViaRest();
+        return true;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return false;
+    }
+    handleFirestoreError(err, OperationType.WRITE, path);
+    return false;
+  }
+}
+
+/**
+ * Delete a verified internship record from Firestore /internships/{id} (admin / employer / college only).
+ */
+export async function deleteVerifiedInternshipFromFirestore(internshipId: string): Promise<boolean> {
+  if (!auth.currentUser || !internshipId) return false;
+  const cleanId = sanitizeFirestoreInternshipId(internshipId);
+  const path = `internships/${cleanId}`;
+  const ref = doc(db, 'internships', cleanId);
+
+  const deleteViaRest = async (): Promise<void> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/internships/${encodeURIComponent(cleanId)}`;
+    const res = await fetchWithTimeout(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (res.status === 404) return;
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST DELETE internship failed (${res.status})`);
+    }
+  };
+
+  try {
+    if (preferRestFirestore) {
+      await deleteViaRest();
+      return true;
+    }
+    try {
+      await withSdkTimeout(deleteDoc(ref), 'Firestore deleteDoc internship');
+      return true;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await deleteViaRest();
+        return true;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return false;
+    }
+    handleFirestoreError(err, OperationType.DELETE, path);
+    return false;
   }
 }
 

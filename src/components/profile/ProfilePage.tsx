@@ -50,7 +50,7 @@ import {
 import { StudentProject } from '../../types';
 
 export const ProfilePage: React.FC = () => {
-  const { user, updateUser, certificates, authToken, logout, applications, savedJobIds } = useApp();
+  const { user, updateUser, certificates, authToken, logout, applications, savedJobIds, setActiveTab, recommendationsBundle } = useApp();
 
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
@@ -58,14 +58,23 @@ export const ProfilePage: React.FC = () => {
   const [age, setAge] = useState<number | string>(user?.age ?? '');
   const [education, setEducation] = useState(user?.education || '');
   const [institution, setInstitution] = useState(user?.institution || user?.college || '');
+  const [course, setCourse] = useState(user?.course || '');
   const [branch, setBranch] = useState(user?.branch || '');
+  const [studyYear, setStudyYear] = useState(user?.studyYear || '');
   const [rollNumber, setRollNumber] = useState(user?.rollNumber || '');
   const [cgpa, setCgpa] = useState(user?.cgpa || '');
   const [graduationYear, setGraduationYear] = useState(user?.graduationYear || '');
   const [location, setLocation] = useState(user?.location || '');
+  const [preferredLocation, setPreferredLocation] = useState(user?.preferredLocation || '');
+  const [workModePreference, setWorkModePreference] = useState<'Online' | 'Offline' | 'Hybrid' | 'Any'>(
+    user?.workModePreference || 'Any'
+  );
   const [skillsStr, setSkillsStr] = useState((user?.skills || []).join(', '));
+  const [nonTechnicalSkillsStr, setNonTechnicalSkillsStr] = useState((user?.nonTechnicalSkills || []).join(', '));
   const [interestsStr, setInterestsStr] = useState((user?.interests || []).join(', '));
+  const [preferredDomain, setPreferredDomain] = useState(user?.preferredDomain || '');
   const [preferredRolesStr, setPreferredRolesStr] = useState((user?.preferredRoles || []).join(', '));
+  const [careerGoals, setCareerGoals] = useState(user?.careerGoals || '');
   const [photoUrl, setPhotoUrl] = useState(user?.photoUrl || '');
   const [resumeFileName, setResumeFileName] = useState(user?.resumeFileName || '');
   const [resumeText, setResumeText] = useState(user?.resumeText || '');
@@ -99,14 +108,21 @@ export const ProfilePage: React.FC = () => {
     setAge(user?.age ?? '');
     setEducation(user?.education || '');
     setInstitution(user?.institution || user?.college || '');
+    setCourse(user?.course || '');
     setBranch(user?.branch || '');
+    setStudyYear(user?.studyYear || '');
     setRollNumber(user?.rollNumber || '');
     setCgpa(user?.cgpa || '');
     setGraduationYear(user?.graduationYear || '');
     setLocation(user?.location || '');
+    setPreferredLocation(user?.preferredLocation || '');
+    setWorkModePreference(user?.workModePreference || 'Any');
     setSkillsStr((user?.skills || []).join(', '));
+    setNonTechnicalSkillsStr((user?.nonTechnicalSkills || []).join(', '));
     setInterestsStr((user?.interests || []).join(', '));
+    setPreferredDomain(user?.preferredDomain || '');
     setPreferredRolesStr((user?.preferredRoles || []).join(', '));
+    setCareerGoals(user?.careerGoals || '');
     setPhotoUrl(user?.photoUrl || '');
     setResumeFileName(user?.resumeFileName || '');
     setResumeText(user?.resumeText || '');
@@ -117,9 +133,13 @@ export const ProfilePage: React.FC = () => {
     setProjects(user?.projects || []);
   }, [
     user?.id,
+    user?.email,
     user?.resumeFileName,
     user?.resumeText,
-    user?.resumeUpdatedAt
+    user?.resumeUpdatedAt,
+    user?.preferredDomain,
+    user?.careerGoals,
+    user?.workModePreference
   ]);
 
   // Auto-fill Resume Content on load if signed-in user has a saved resume in users/{uid}/resume/current
@@ -190,13 +210,15 @@ export const ProfilePage: React.FC = () => {
 
   // Calculate profile completeness
   const calculateCompleteness = () => {
-    let score = 20;
-    if (name) score += 15;
-    if (email && phone) score += 15;
-    if (education && institution) score += 15;
-    if (skillsStr.length > 5) score += 15;
+    let score = 15;
+    if (name) score += 10;
+    if (email && phone) score += 10;
+    if (education && institution && (course || branch)) score += 15;
+    if (skillsStr.trim().length > 2) score += 15;
+    if (interestsStr.trim().length > 2 || preferredDomain.trim().length > 2) score += 10;
+    if (careerGoals.trim().length > 5) score += 10;
     if (resumeText.trim().length > 20) score += 10;
-    if (preferredRolesStr.length > 5) score += 10;
+    if (preferredRolesStr.trim().length > 2 || preferredLocation.trim().length > 2) score += 5;
     return Math.min(100, score);
   };
 
@@ -358,9 +380,14 @@ export const ProfilePage: React.FC = () => {
     setErrorNotice(null);
 
     const parsedSkills = skillsStr.split(',').map(s => s.trim()).filter(Boolean);
+    const parsedNonTechSkills = nonTechnicalSkillsStr.split(',').map(s => s.trim()).filter(Boolean);
     const parsedInterests = interestsStr.split(',').map(s => s.trim()).filter(Boolean);
     const parsedPreferredRoles = preferredRolesStr.split(',').map(s => s.trim()).filter(Boolean);
     const parsedAge = age !== '' && Number(age) >= 13 && Number(age) <= 120 ? Number(age) : undefined;
+    const safeWorkMode: 'Online' | 'Offline' | 'Hybrid' | 'Any' =
+      workModePreference === 'Online' || workModePreference === 'Offline' || workModePreference === 'Hybrid' || workModePreference === 'Any'
+        ? workModePreference
+        : 'Any';
 
     const updatedData = {
       name: name.trim(),
@@ -370,16 +397,23 @@ export const ProfilePage: React.FC = () => {
       education: education.trim(),
       institution: institution.trim(),
       college: institution.trim(),
+      course: course.trim(),
       branch: branch.trim(),
+      studyYear: studyYear.trim(),
       rollNumber: rollNumber.trim(),
       cgpa: cgpa.trim(),
       graduationYear: graduationYear.trim(),
       location: location.trim(),
+      preferredLocation: preferredLocation.trim(),
+      workModePreference: safeWorkMode,
+      preferredDomain: preferredDomain.trim(),
+      careerGoals: careerGoals.trim(),
       photoUrl,
       resumeFileName,
       resumeUpdatedAt,
       resumeText,
       skills: parsedSkills,
+      nonTechnicalSkills: parsedNonTechSkills,
       interests: parsedInterests,
       preferredRoles: parsedPreferredRoles,
       projects,
@@ -401,11 +435,11 @@ export const ProfilePage: React.FC = () => {
       }
       updateUser(updatedData);
       setIsSaved(true);
-      setSuccessNotice('Profile details saved successfully!');
+      setSuccessNotice('Profile saved! AI internship recommendations are updating automatically for your updated skills & goals.');
       setTimeout(() => {
         setIsSaved(false);
         setSuccessNotice(null);
-      }, 3000);
+      }, 4000);
     } catch (err: any) {
       setErrorNotice(err?.message || 'Failed to save profile details. Please try again.');
     } finally {
@@ -788,37 +822,67 @@ export const ProfilePage: React.FC = () => {
 
           <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-xs space-y-4">
             <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider border-b border-slate-100 dark:border-slate-700 pb-2">
-              Academic & Career Aspirations
+              Academic Qualifications &amp; College Details
             </h3>
 
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Current Degree / Education</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Education Qualification
+              </label>
               <input
                 type="text"
                 value={education}
                 onChange={(e) => setEducation(e.target.value)}
+                placeholder="e.g. Undergraduate (B.Tech / B.Com / B.Sc / Diploma)"
                 className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
               />
             </div>
 
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">College / University</label>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                College / University Name
+              </label>
               <input
                 type="text"
                 value={institution}
                 onChange={(e) => setInstitution(e.target.value)}
+                placeholder="e.g. Delhi Technological University"
                 className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
               />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Branch / Major</label>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Degree</label>
+                <input
+                  type="text"
+                  value={course}
+                  onChange={(e) => setCourse(e.target.value)}
+                  placeholder="e.g. B.Tech, BCA, B.Com"
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Branch / Specialization</label>
                 <input
                   type="text"
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
                   placeholder="e.g. Computer Science & Engineering"
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">Current Semester / Year</label>
+                <input
+                  type="text"
+                  value={studyYear}
+                  onChange={(e) => setStudyYear(e.target.value)}
+                  placeholder="e.g. 3rd Year / Sem 6"
                   className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
                 />
               </div>
@@ -858,33 +922,142 @@ export const ProfilePage: React.FC = () => {
                 />
               </div>
             </div>
+          </div>
 
+        </div>
+
+        {/* AI Internship Matching Preferences & Skills */}
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl border border-orange-200/80 dark:border-slate-700 shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-700 pb-3">
             <div>
-              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                Preferred Job & Internship Roles (comma-separated)
-              </label>
-              <input
-                type="text"
-                value={preferredRolesStr}
-                onChange={(e) => setPreferredRolesStr(e.target.value)}
-                placeholder="Software Engineer, Data Analyst, Product Intern"
-                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
-              />
+              <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-[#FF7A00]" />
+                <span>AI Internship Matching Profile (Skills, Interests &amp; Career Goals)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Powers your weighted 40% Skills / 25% Interest / 20% Education / 10% Career Goal / 5% Location match score.
+              </p>
             </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('jobs')}
+              className="px-3.5 py-1.5 rounded-xl bg-orange-50 dark:bg-orange-950/60 hover:bg-orange-100 text-[#FF7A00] font-bold text-xs border border-orange-200 dark:border-orange-800 flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>View AI Matches ({recommendationsBundle?.recommendations?.length ?? 0})</span>
+            </button>
+          </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                Skills (comma-separated for AI Matcher)
+                Technical Skills (comma-separated)
               </label>
               <input
                 type="text"
                 value={skillsStr}
                 onChange={(e) => setSkillsStr(e.target.value)}
+                placeholder="Java, Python, C, HTML, CSS, React, AI/ML, SQL"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Non-Technical Skills (comma-separated)
+              </label>
+              <input
+                type="text"
+                value={nonTechnicalSkillsStr}
+                onChange={(e) => setNonTechnicalSkillsStr(e.target.value)}
+                placeholder="Communication, Leadership, Teamwork, Presentation, Problem Solving"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Areas of Interest (comma-separated)
+              </label>
+              <input
+                type="text"
+                value={interestsStr}
+                onChange={(e) => setInterestsStr(e.target.value)}
+                placeholder="Web Development, Artificial Intelligence, Data Science, FinTech, UI/UX"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Preferred Internship Domain
+              </label>
+              <input
+                type="text"
+                value={preferredDomain}
+                onChange={(e) => setPreferredDomain(e.target.value)}
+                placeholder="e.g. Full-Stack Engineering, AI & Data Analytics, Digital Marketing, Finance"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Preferred Internship Location
+              </label>
+              <input
+                type="text"
+                value={preferredLocation}
+                onChange={(e) => setPreferredLocation(e.target.value)}
+                placeholder="e.g. Bengaluru, Delhi NCR, Mumbai, Remote / Pan-India"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Online / Offline Work Mode Preference
+              </label>
+              <select
+                value={workModePreference}
+                onChange={(e) => setWorkModePreference(e.target.value as 'Online' | 'Offline' | 'Hybrid' | 'Any')}
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium cursor-pointer"
+              >
+                <option value="Any">Any (Flexible — Online, Offline &amp; Hybrid)</option>
+                <option value="Online">Online / Remote Only</option>
+                <option value="Offline">Offline / In-Office</option>
+                <option value="Hybrid">Hybrid (In-Office + Remote)</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Preferred Job &amp; Internship Roles (comma-separated)
+              </label>
+              <input
+                type="text"
+                value={preferredRolesStr}
+                onChange={(e) => setPreferredRolesStr(e.target.value)}
+                placeholder="Frontend Developer Intern, Python AI Intern, Data Analyst"
+                className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-700 dark:text-slate-300 block mb-1">
+                Career Goals &amp; Learning Objectives
+              </label>
+              <textarea
+                rows={2}
+                value={careerGoals}
+                onChange={(e) => setCareerGoals(e.target.value)}
+                placeholder="e.g. Build production React & AI applications, gain hands-on backend API experience, and qualify for a full-time software engineering role."
                 className="w-full px-3.5 py-2 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-white font-medium"
               />
             </div>
           </div>
-
         </div>
 
         {/* Portfolio & Social Presence */}
