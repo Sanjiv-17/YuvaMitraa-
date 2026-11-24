@@ -410,7 +410,7 @@ export const CollegePortal: React.FC = () => {
                         </span>
                       </div>
                       <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-lg">
-                        {drive.stipend}
+                        {drive.stipend || 'Not disclosed'}
                       </span>
                     </div>
                   ))}
@@ -557,7 +557,7 @@ export const CollegePortal: React.FC = () => {
                       <Building2 className="w-3 h-3" /> Placement Drive
                     </span>
                     <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                      {drive.stipend}
+                      {drive.stipend || 'Not disclosed'}
                     </span>
                   </div>
                   <h3 className="font-bold text-slate-900 dark:text-white text-base leading-snug line-clamp-1">

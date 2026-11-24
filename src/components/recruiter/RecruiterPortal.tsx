@@ -492,7 +492,10 @@ export const RecruiterPortal: React.FC = () => {
                   </div>
 
                   <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">
-                    {job.company} • {job.location} • <strong className="text-slate-800 dark:text-slate-200">{job.stipend}</strong>
+                    {job.company} • {job.location}
+                    {job.stipend ? (
+                      <> • <strong className="text-slate-800 dark:text-slate-200">{job.stipend}</strong></>
+                    ) : null}
                   </p>
 
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
