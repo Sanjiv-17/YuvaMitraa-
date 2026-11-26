@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Course } from '../../types';
+import { suggestResourcesForMissingSkills } from '../../services/matchingEngine';
 import {
   getPyodideStatus,
   preloadPyodideRuntime,
@@ -374,7 +375,7 @@ console.log(fib(10));`
 ];
 
 export const CourseCatalog: React.FC = () => {
-  const { courses, setSelectedCourseForPlayer, setActiveTab, user, updateUser } = useApp();
+  const { courses, setSelectedCourseForPlayer, setActiveTab, user, updateUser, recommendationsBundle } = useApp();
   const [viewMode, setViewMode] = useState<'catalog' | 'arena'>('catalog');
   
   // Catalog states
@@ -383,9 +384,13 @@ export const CourseCatalog: React.FC = () => {
   const [levelFilter, setLevelFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<'All' | 'in-progress' | 'completed' | 'not-started'>('All');
   const [sortBy, setSortBy] = useState<'popular' | 'rating' | 'duration'>('popular');
+  const bookmarksKey = user?.id ? `ym_bookmarked_courses_${user.id}` : null;
+  const solvedProblemsKey = user?.id ? `ym_solved_problems_${user.id}` : null;
+
   const [bookmarkedCourseIds, setBookmarkedCourseIds] = useState<string[]>(() => {
+    if (!bookmarksKey) return [];
     try {
-      const saved = localStorage.getItem('ym_bookmarked_courses');
+      const saved = localStorage.getItem(bookmarksKey);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -410,14 +415,41 @@ export const CourseCatalog: React.FC = () => {
   } | null>(null);
   const [showHintModal, setShowHintModal] = useState(false);
   const [solvedProblemIds, setSolvedProblemIds] = useState<string[]>(() => {
+    if (!solvedProblemsKey) return [];
     try {
-      const saved = localStorage.getItem('ym_solved_problems');
+      const saved = localStorage.getItem(solvedProblemsKey);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
     }
   });
   const [rewardClaimed, setRewardClaimed] = useState(false);
+
+  // Reload or clear bookmarks & solved problems whenever the authenticated user changes
+  useEffect(() => {
+    if (!bookmarksKey) {
+      setBookmarkedCourseIds([]);
+    } else {
+      try {
+        const saved = localStorage.getItem(bookmarksKey);
+        setBookmarkedCourseIds(saved ? JSON.parse(saved) : []);
+      } catch {
+        setBookmarkedCourseIds([]);
+      }
+    }
+
+    if (!solvedProblemsKey) {
+      setSolvedProblemIds([]);
+    } else {
+      try {
+        const saved = localStorage.getItem(solvedProblemsKey);
+        setSolvedProblemIds(saved ? JSON.parse(saved) : []);
+      } catch {
+        setSolvedProblemIds([]);
+      }
+    }
+    setRewardClaimed(false);
+  }, [bookmarksKey, solvedProblemsKey]);
 
   useEffect(() => {
     return subscribePyodideStatus(setPyodideStatus);
@@ -610,7 +642,9 @@ export const CourseCatalog: React.FC = () => {
     if (!solvedProblemIds.includes(activeProblem.id)) {
       const nextSolved = [...solvedProblemIds, activeProblem.id];
       setSolvedProblemIds(nextSolved);
-      localStorage.setItem('ym_solved_problems', JSON.stringify(nextSolved));
+      if (solvedProblemsKey) {
+        localStorage.setItem(solvedProblemsKey, JSON.stringify(nextSolved));
+      }
       if (updateUser) {
         updateUser({
           xpPoints: (user?.xpPoints ?? 0) + 100,
@@ -624,7 +658,9 @@ export const CourseCatalog: React.FC = () => {
     e.stopPropagation();
     setBookmarkedCourseIds(prev => {
       const next = prev.includes(courseId) ? prev.filter(id => id !== courseId) : [...prev, courseId];
-      localStorage.setItem('ym_bookmarked_courses', JSON.stringify(next));
+      if (bookmarksKey) {
+        localStorage.setItem(bookmarksKey, JSON.stringify(next));
+      }
       return next;
     });
   };
@@ -700,8 +736,34 @@ export const CourseCatalog: React.FC = () => {
       });
   }, [courses, selectedCategory, levelFilter, statusFilter, searchQuery, sortBy, user?.enrolledCourses]);
 
-  // Featured Course
+  // Featured Course & Personalized Missing-Skill Courses
   const featuredCourse = courses.find(c => c.id === 'course-8') || courses[0];
+
+  const missingSkillCourses = useMemo(() => {
+    const missingSkills = recommendationsBundle?.overallMissingSkills || [];
+    if (missingSkills.length === 0) return [];
+    const suggestions = suggestResourcesForMissingSkills(missingSkills);
+    const items: Array<{ course: Course; skill: string; reason: string; progressPct: number; passed: boolean }> = [];
+    const seen = new Set<string>();
+    for (const s of suggestions) {
+      if (!s.courseId || seen.has(s.courseId)) continue;
+      const found = courses.find(c => c.id === s.courseId);
+      if (!found) continue;
+      seen.add(s.courseId);
+      const enrolled = (user?.enrolledCourses || []).find(e => e.courseId === found.id);
+      const progressPct = enrolled
+        ? Math.min(100, Math.round((enrolled.completedModuleIds.length / Math.max(1, found.modules.length)) * 100))
+        : 0;
+      items.push({
+        course: found,
+        skill: s.skill,
+        reason: s.reason,
+        progressPct,
+        passed: Boolean(enrolled?.passed),
+      });
+    }
+    return items.slice(0, 3);
+  }, [recommendationsBundle?.overallMissingSkills, courses, user?.enrolledCourses]);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16">
@@ -1153,6 +1215,79 @@ export const CourseCatalog: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Personalized Courses Recommended for Missing Skills */}
+          {missingSkillCourses.length > 0 && (
+            <div className="bg-gradient-to-br from-sky-50 via-white to-orange-50/50 dark:from-slate-800 dark:via-slate-800 dark:to-slate-900 rounded-3xl border border-sky-200/80 dark:border-slate-700 p-5 sm:p-6 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-[#0284C7]">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Recommended for Your Missing Skills</span>
+                  </div>
+                  <h2 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white mt-0.5">
+                    Close Internship Skill Gaps Faster
+                  </h2>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(recommendationsBundle?.overallMissingSkills || []).slice(0, 4).map((sk) => (
+                    <span
+                      key={sk}
+                      className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+                    >
+                      Gap: {sk}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {missingSkillCourses.map(({ course, skill, progressPct, passed }) => (
+                  <div
+                    key={course.id}
+                    className="bg-white dark:bg-slate-800/90 p-4 rounded-2xl border border-slate-200/80 dark:border-slate-700 flex flex-col justify-between gap-3 shadow-2xs hover:border-[#FF7A00]/60 transition-all"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-50 dark:bg-orange-950/50 text-[#FF7A00] border border-orange-200 dark:border-orange-800">
+                          Builds {skill}
+                        </span>
+                        <span className="text-[10px] font-semibold text-slate-500">
+                          {course.durationHours}h • {course.level}
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white leading-snug line-clamp-2">
+                        {course.title}
+                      </h3>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                          <span>{passed ? 'Completed & Certified' : progressPct > 0 ? 'In Progress' : 'Not Started'}</span>
+                          <span className="font-bold text-slate-700 dark:text-slate-300">{passed ? '100%' : `${progressPct}%`}</span>
+                        </div>
+                        <div className="w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${passed ? 'bg-emerald-500' : 'bg-[#FF7A00]'}`}
+                            style={{ width: `${passed ? 100 : progressPct}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCourseForPlayer(course);
+                        setActiveTab('course-player');
+                      }}
+                      className="w-full py-2 rounded-xl bg-[#FF7A00] hover:bg-[#E06900] text-white text-xs font-bold transition-colors cursor-pointer"
+                    >
+                      {passed ? 'Review Course' : progressPct > 0 ? 'Continue Learning' : 'Start Skill Course'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Featured Spotlight Card */}
           {featuredCourse && (

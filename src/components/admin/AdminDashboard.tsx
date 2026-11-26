@@ -501,7 +501,7 @@ export const AdminDashboard: React.FC = () => {
                   <span className="font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">Operational (SHA-256)</span>
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-2xl bg-sky-50/60 dark:bg-sky-950/40 border border-sky-200 text-xs">
-                  <span className="font-semibold text-sky-900 dark:text-sky-200">Gemini 4 Hydrogen AI Assistant</span>
+                  <span className="font-semibold text-sky-900 dark:text-sky-200">AI Career &amp; Resume Assistant</span>
                   <span className="font-bold text-sky-700 bg-sky-100 px-2 py-0.5 rounded-md">Connected (Server-Side)</span>
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-2xl bg-amber-50/60 dark:bg-amber-950/40 border border-amber-200 text-xs">

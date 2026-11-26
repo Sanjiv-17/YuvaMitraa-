@@ -296,7 +296,7 @@ export const RecommendedForYou: React.FC<RecommendedForYouProps> = ({ compact = 
         <div className="p-3 rounded-2xl bg-sky-50/80 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 text-sky-900 dark:text-sky-200 text-[11px] flex items-center gap-2">
           <Info className="w-4 h-4 text-[#0284C7] shrink-0" />
           <span>
-            Paid APIs (AICTE/NCS direct connectors) are currently unconfigured; using free public feeds (Arbeitnow &amp; Remotive), YuvaMitraa &amp; Firestore verified listings ({allRecommendations.length} ranked).
+            Official AICTE/NCS partner API credentials are not configured; currently displaying live Arbeitnow, Remotive &amp; verified Firestore listings ({allRecommendations.length} ranked).
           </span>
         </div>
       )}
@@ -379,6 +379,23 @@ export const RecommendedForYou: React.FC<RecommendedForYouProps> = ({ compact = 
                             <span>Beginner-Friendly</span>
                           </span>
                         )}
+                        {(() => {
+                          const status =
+                            rec.eligibilityStatus ||
+                            (rec.matchScore >= 72 ? 'Eligible' : rec.matchScore >= 48 ? 'Partially Eligible' : 'Needs Upskilling');
+                          const statusClass =
+                            status === 'Eligible'
+                              ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                              : status === 'Partially Eligible'
+                              ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800'
+                              : 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800';
+                          return (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${statusClass}`}>
+                              {status === 'Eligible' ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
+                              <span>{status}</span>
+                            </span>
+                          );
+                        })()}
                       </div>
 
                       <h3 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white leading-snug">
@@ -442,10 +459,23 @@ export const RecommendedForYou: React.FC<RecommendedForYouProps> = ({ compact = 
                     </div>
                   </div>
 
-                  {/* Eligibility Criteria */}
-                  <div className="text-[11px] text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 px-3 py-2 rounded-xl border border-slate-200/70 dark:border-slate-700">
-                    <span className="font-bold text-slate-800 dark:text-slate-100">Eligibility: </span>
-                    <span>{rec.eligibility}</span>
+                  {/* Eligibility Criteria & Missing Qualifications */}
+                  <div className="text-[11px] text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 px-3 py-2 rounded-xl border border-slate-200/70 dark:border-slate-700 space-y-1">
+                    <div>
+                      <span className="font-bold text-slate-800 dark:text-slate-100">Eligibility: </span>
+                      <span>{rec.eligibility}</span>
+                    </div>
+                    {rec.missingQualifications && rec.missingQualifications.length > 0 && (
+                      <div className="pt-1 border-t border-slate-100 dark:border-slate-700 text-[10px] text-amber-700 dark:text-amber-300 space-y-0.5">
+                        <span className="font-bold block">Missing Qualifications / Gaps:</span>
+                        {rec.missingQualifications.map((gap, gIdx) => (
+                          <div key={gIdx} className="flex items-start gap-1">
+                            <span>•</span>
+                            <span>{gap}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Why this internship matches the student */}

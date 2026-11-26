@@ -78,10 +78,11 @@ export const AIAssistantSection: React.FC<{
     setActiveSubTab(initialSubTab);
   }, [initialSubTab]);
 
-  // Chat Language (English or Kannada)
+  // Chat Language (English or Kannada) & Focus Mode
   const [chatLanguage, setChatLanguage] = useState<'English' | 'Kannada'>(
     appLanguage === 'Kannada' ? 'Kannada' : 'English'
   );
+  const [chatFocusMode, setChatFocusMode] = useState<'guidance' | 'interview' | 'communication' | 'career-path'>('guidance');
 
   // Initial welcome message per language
   const getWelcomeText = (lang: 'English' | 'Kannada', name: string) => {
@@ -91,23 +92,22 @@ export const AIAssistantSection: React.FC<{
 
 ನಿಮ್ಮ ವಿದ್ಯಾಭ್ಯಾಸ, ಆಸಕ್ತಿ ಮತ್ತು ಕೌಶಲ್ಯಗಳಿಗೆ ತಕ್ಕಂತೆ ನಾನು ನೆರವಾಗಬಲ್ಲೆ:
 • ಸೂಕ್ತವಾದ ಇಂಟರ್ನ್‌ಶಿಪ್ ಮತ್ತು ಉದ್ಯೋಗಾವಕಾಶಗಳು
-• ತಾಂತ್ರಿಕ ಮತ್ತು HR ಇಂಟರ್ವ್ಯೂ ತಯಾರಿ
+• ತಾಂತ್ರಿಕ ಮತ್ತು HR ಇಂಟರ್ವ್ಯೂ ಪ್ರಶ್ನೆಗಳು ಮತ್ತು ಮಾದರಿ ಉತ್ತರಗಳು
+• ಸಂವಹನ ಕೌಶಲ್ಯ (Communication Skills) ಮತ್ತು ಇಮೇಲ್/ಪಿಚ್ ತರಬೇತಿ
+• ಕರಿಯರ್ ಮಾರ್ಗಸೂಚಿ ಮತ್ತು ಪ್ರಮುಖ ಕೌಶಲ್ಯಗಳ ಆಯ್ಕೆ
 • ATS-ಸ್ನೇಹಿ ರೆಸ್ಯೂಮೆ ಸುಧಾರಣೆ
-• ಹಂತ-ಹಂತದ ಕರಿಯರ್ ಕಲಿಕಾ ಮಾರ್ಗಸೂಚಿ
-• ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು ಮತ್ತು ವಿದ್ಯಾರ್ಥಿವೇತನಗಳು
 
-ಕನ್ನಡ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ ನಿಮ್ಮ ಯಾವುದೇ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ ಅಥವಾ ಕೆಳಗಿನ ಪ್ರಾಂಪ್ಟ್‌ಗಳನ್ನು ಆಯ್ಕೆಮಾಡಿ!`;
+ಕನ್ನಡ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ ನಿಮ್ಮ ಯಾವುದೇ ಪ್ರಶ್ನೆಯನ್ನು ಕೇಳಿ ಅಥವಾ ಕೆಳಗಿನ ಮೋಡ್‌ಗಳನ್ನು ಆಯ್ಕೆಮಾಡಿ!`;
     }
     return `Namaste ${firstName}! 🙏 I am your YuvaMitraa AI Career Mentor.
 
-I analyze your verified profile to provide tailored guidance:
-• Discover genuine, verified internships & jobs matching your branch
-• Practice technical & HR mock interviews with instant feedback
-• Generate and optimize your resume for recruiter ATS systems
-• Step-by-step career mastery roadmaps and skill learning plans
-• Guidance on government schemes (PMKVY, PM Internship Scheme, NAPS)
+Choose a focus mode below or ask me anything to get tailored support:
+• **Career Guidance**: Personalized 30-day actions & verified internship alignment
+• **Interview Questions**: Role-specific technical & HR questions with model STAR answers
+• **Communication Coach**: Polish your self-introduction, recruiter emails, and speaking clarity
+• **Career Paths & Skills**: Compare high-growth tracks and the exact skills to build next
 
-Feel free to ask me anything in English or Kannada, or click one of the suggested prompts below!`;
+Ask me anything in English or Kannada!`;
   };
 
   const storageKey = `ym_chat_sessions_${user.id || 'guest'}`;
@@ -119,10 +119,13 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     branch: user.branch,
     course: user.course,
     education: user.education,
+    studyYear: user.studyYear,
     graduationYear: user.graduationYear,
     skills: user.skills,
     interests: user.interests,
     preferredRoles: user.preferredRoles,
+    careerGoals: user.careerGoals,
+    projects: (user.projects || []).map(p => ({ id: p.id, title: p.title, description: p.description, technologies: p.technologies })),
     location: user.location,
     currentRole: user.currentRole,
     yearsOfExperience: user.yearsOfExperience,
@@ -463,7 +466,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
 
     try {
       const history = messages.map(m => ({ sender: m.sender, text: m.text }));
-      const res = await askStudyAssistantDetailed(textToSend, history, chatLanguage, getSanitizedUserContext());
+      const res = await askStudyAssistantDetailed(textToSend, history, chatLanguage, getSanitizedUserContext(), chatFocusMode);
 
       const assistantMsg: ChatMessage = {
         id: `ast-${Date.now()}`,
@@ -512,7 +515,7 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     setIsLoading(true);
     try {
       const history = messages.slice(0, -1).map(m => ({ sender: m.sender, text: m.text }));
-      const res = await askStudyAssistantDetailed(lastUserMsg.text, history, chatLanguage, getSanitizedUserContext());
+      const res = await askStudyAssistantDetailed(lastUserMsg.text, history, chatLanguage, getSanitizedUserContext(), chatFocusMode);
 
       const assistantMsg: ChatMessage = {
         id: `ast-${Date.now()}`,
@@ -691,24 +694,49 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
     );
   };
 
-  // Quick Prompt pills (adapt when language changes)
-  const QUICK_PROMPTS_ENGLISH = [
-    'What genuine internships match my current profile?',
-    'How do I crack a technical interview for a fresher role?',
-    'Give me 5 ATS resume optimization tips for tech roles',
-    'Explain the PM Internship Scheme eligibility & stipend',
-    'Create a 4-week learning roadmap for full-stack React'
-  ];
+  // Quick Prompt pills tailored by focus mode & language
+  const FOCUS_PROMPTS_ENGLISH: Record<'guidance' | 'interview' | 'communication' | 'career-path', string[]> = {
+    guidance: [
+      'What verified internships fit my current skills and branch?',
+      'Build a 30-day internship readiness action plan for me',
+      'Give me 5 high-impact ATS resume improvement tips',
+      'Explain the PM Internship Scheme eligibility & stipend'
+    ],
+    interview: [
+      'Generate 5 technical + HR interview questions for my target role with STAR model answers',
+      'Ask me a realistic system design or project deep-dive interview question',
+      'What are the top behavioral questions asked in campus placements?',
+      'How do I answer "Tell me about yourself" as a fresher?'
+    ],
+    communication: [
+      'Help me write a crisp 60-second self-introduction for interviews',
+      'Draft a professional cold email to a recruiter for an internship',
+      'Give me daily exercises to improve spoken English fluency & confidence',
+      'Rewrite my project explanation using the STAR communication framework'
+    ],
+    'career-path': [
+      'Suggest top 3 career paths based on my education & interests',
+      'Which high-demand skills should I learn next to stand out in 2026?',
+      'Compare Frontend, Backend, and AI/Data tracks for Indian freshers',
+      'Suggest 2 portfolio projects that prove job readiness'
+    ],
+  };
 
   const QUICK_PROMPTS_KANNADA = [
     'ನನ್ನ ಪ್ರೊಫೈಲ್‌ಗೆ ಸೂಕ್ತವಾದ ಇಂಟರ್ನ್‌ಶಿಪ್‌ಗಳು ಯಾವುವು?',
-    'ರೆಸ್ಯೂಮೆ ATS ಸ್ಕೋರ್ ಹೆಚ್ಚಿಸಲು 5 ಸಲಹೆಗಳು ನೀಡಿ',
-    'ಟೆಕ್ನಿಕಲ್ ಇಂಟರ್ವ್ಯೂನಲ್ಲಿ ಸಾಮಾನ್ಯವಾಗಿ ಕೇಳುವ ಪ್ರಶ್ನೆಗಳು',
-    'ಪಿಎಂ ಇಂಟರ್ನ್‌ಶಿಪ್ ಯೋಜನೆಯ ನಿಯಮಗಳು ಮತ್ತು ಸ್ಟೈಪೆಂಡ್ ತಿಳಿಸಿ',
-    'ರಿಯಾಕ್ಟ್ ಮತ್ತು ವೆಬ್ ಡೆವಲಪ್ಮೆಂಟ್ ಕಲಿಯಲು 4 ವಾರಗಳ ಯೋಜನೆ'
+    'ಟೆಕ್ನಿಕಲ್ ಮತ್ತು HR ಇಂಟರ್ವ್ಯೂ ಪ್ರಶ್ನೆಗಳು ಮತ್ತು ಉತ್ತರಗಳನ್ನು ನೀಡಿ',
+    'ಇಂಟರ್ವ್ಯೂಗಾಗಿ 60 ಸೆಕೆಂಡುಗಳ ಸ್ವ-ಪರಿಚಯ (Self-Introduction) ಸಿದ್ಧಪಡಿಸಿ',
+    'ನನ್ನ ವಿದ್ಯಾಭ್ಯಾಸಕ್ಕೆ ತಕ್ಕ ಉತ್ತಮ ಕರಿಯರ್ ಮಾರ್ಗ ಮತ್ತು ಕೌಶಲ್ಯಗಳನ್ನು ಸೂಚಿಸಿ'
   ];
 
-  const currentPrompts = chatLanguage === 'Kannada' ? QUICK_PROMPTS_KANNADA : QUICK_PROMPTS_ENGLISH;
+  const currentPrompts = chatLanguage === 'Kannada' ? QUICK_PROMPTS_KANNADA : FOCUS_PROMPTS_ENGLISH[chatFocusMode];
+
+  const FOCUS_MODES = [
+    { id: 'guidance' as const, label: 'Career Guidance', icon: Compass },
+    { id: 'interview' as const, label: 'Interview Questions', icon: Mic },
+    { id: 'communication' as const, label: 'Communication Coach', icon: MessageSquare },
+    { id: 'career-path' as const, label: 'Career Paths & Skills', icon: TrendingUp },
+  ];
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -718,13 +746,10 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
           <div>
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-50 dark:bg-orange-950/40 text-[#FF7A00] text-xs font-semibold uppercase tracking-wider mb-2">
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Gemini AI • Career Mentor</span>
+              <span>Intelligent Career Mentor</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
               <span>YuvaMitraa AI Career Mentor</span>
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                Live Backend
-              </span>
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1">
               Your 24/7 intelligent career mentor for personalized guidance, genuine job matching, ATS resume optimization, mock interviews, and learning plans.
@@ -922,10 +947,32 @@ Feel free to ask me anything in English or Kannada, or click one of the suggeste
             </div>
           </div>
 
-          {/* Quick Suggested Questions Bar */}
+          {/* Focus Mode Bar + Quick Suggested Questions */}
+          <div className="px-4 py-2 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+            {FOCUS_MODES.map((mode) => {
+              const ModeIcon = mode.icon;
+              const active = chatFocusMode === mode.id;
+              return (
+                <button
+                  key={mode.id}
+                  type="button"
+                  onClick={() => setChatFocusMode(mode.id)}
+                  className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
+                    active
+                      ? 'bg-[#FF7A00] text-white shadow-2xs'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-orange-50 hover:text-[#FF7A00]'
+                  }`}
+                >
+                  <ModeIcon className="w-3.5 h-3.5" />
+                  <span>{mode.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
           <div className="px-4 py-2.5 bg-orange-50/50 dark:bg-slate-800/20 border-b border-orange-100/50 dark:border-slate-800 flex items-center gap-2 overflow-x-auto scrollbar-none">
             <span className="text-[11px] font-bold text-[#FF7A00] uppercase tracking-wider shrink-0 flex items-center gap-1">
-              <Sparkles className="w-3 h-3" /> {chatLanguage === 'Kannada' ? 'ಸಲಹೆ ಪ್ರಶ್ನೆಗಳು:' : 'Suggested Questions:'}
+              <Sparkles className="w-3 h-3" /> {chatLanguage === 'Kannada' ? 'ಸಲಹೆ ಪ್ರಶ್ನೆಗಳು:' : 'Try Asking:'}
             </span>
             {currentPrompts.map((prompt, i) => (
               <button

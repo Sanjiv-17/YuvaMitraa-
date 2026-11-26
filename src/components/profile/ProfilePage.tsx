@@ -48,6 +48,7 @@ import {
   saveStudentProjectApi
 } from '../../services/api';
 import { StudentProject } from '../../types';
+import { LastUpdatedBadge } from '../common/LastUpdatedBadge';
 
 export const ProfilePage: React.FC = () => {
   const { user, updateUser, certificates, authToken, logout, applications, savedJobIds, setActiveTab, recommendationsBundle } = useApp();
@@ -79,6 +80,7 @@ export const ProfilePage: React.FC = () => {
   const [resumeFileName, setResumeFileName] = useState(user?.resumeFileName || '');
   const [resumeText, setResumeText] = useState(user?.resumeText || '');
   const [resumeUpdatedAt, setResumeUpdatedAt] = useState(user?.resumeUpdatedAt || '');
+  const [profileUpdatedAt, setProfileUpdatedAt] = useState(user?.profileUpdatedAt || user?.updatedAt || '');
   const [githubUrl, setGithubUrl] = useState(user?.githubUrl || '');
   const [linkedinUrl, setLinkedinUrl] = useState(user?.linkedinUrl || '');
   const [portfolioUrl, setPortfolioUrl] = useState(user?.portfolioUrl || '');
@@ -127,6 +129,7 @@ export const ProfilePage: React.FC = () => {
     setResumeFileName(user?.resumeFileName || '');
     setResumeText(user?.resumeText || '');
     setResumeUpdatedAt(user?.resumeUpdatedAt || '');
+    setProfileUpdatedAt(user?.profileUpdatedAt || user?.updatedAt || '');
     setGithubUrl(user?.githubUrl || '');
     setLinkedinUrl(user?.linkedinUrl || '');
     setPortfolioUrl(user?.portfolioUrl || '');
@@ -137,19 +140,25 @@ export const ProfilePage: React.FC = () => {
     user?.resumeFileName,
     user?.resumeText,
     user?.resumeUpdatedAt,
+    user?.profileUpdatedAt,
+    user?.updatedAt,
     user?.preferredDomain,
     user?.careerGoals,
     user?.workModePreference
   ]);
 
-  // Auto-fill Resume Content on load if signed-in user has a saved resume in users/{uid}/resume/current
+  // Auto-fill Resume Content on load strictly for the currently authenticated user's UID
   useEffect(() => {
     let cancelled = false;
+    const expectedUid = user?.id;
+    if (!expectedUid) return;
 
     const loadSavedResume = async (uid: string) => {
+      if (!uid || uid !== expectedUid) return;
       try {
         const saved = await getSavedResumeFromFirestore(uid);
         if (cancelled) return;
+        if (!auth.currentUser || auth.currentUser.uid !== uid || user?.id !== uid) return;
         if (saved && saved.text) {
           setResumeFileName(saved.fileName || 'resume.pdf');
           setResumeText(saved.text);
@@ -165,12 +174,12 @@ export const ProfilePage: React.FC = () => {
       }
     };
 
-    if (auth.currentUser) {
+    if (auth.currentUser && auth.currentUser.uid === expectedUid) {
       void loadSavedResume(auth.currentUser.uid);
     }
 
     const unsub = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
+      if (fbUser && fbUser.uid === expectedUid) {
         setResumeSignInPrompt(null);
         void loadSavedResume(fbUser.uid);
       }
@@ -180,7 +189,7 @@ export const ProfilePage: React.FC = () => {
       cancelled = true;
       unsub();
     };
-  }, []);
+  }, [user?.id]);
   
   // Status states
   const [isSaving, setIsSaving] = useState(false);
@@ -233,19 +242,30 @@ export const ProfilePage: React.FC = () => {
         if (uploadEvent.target?.result) {
           const dataUrl = uploadEvent.target.result as string;
           setErrorNotice(null);
-          if (authToken) {
-            try {
-              await uploadProfilePhotoApi(authToken, dataUrl);
-              setPhotoUrl(dataUrl);
-              updateUser({ photoUrl: dataUrl });
-              setSuccessNotice('Profile photo updated successfully!');
-              setTimeout(() => setSuccessNotice(null), 3000);
-            } catch (err: any) {
-              setErrorNotice(err?.message || 'Failed to upload profile photo.');
+          try {
+            let resolvedUpdatedAt = '';
+            if (authToken) {
+              const res = await uploadProfilePhotoApi(authToken, dataUrl);
+              resolvedUpdatedAt = res?.profileUpdatedAt || res?.user?.profileUpdatedAt || '';
             }
-          } else {
+            if (auth.currentUser && auth.currentUser.uid === user?.id) {
+              const fsRes = await syncUserProfileToFirestore(
+                auth.currentUser.uid,
+                { photoUrl: dataUrl },
+                { markProfileUpdated: true }
+              );
+              if (fsRes?.profileUpdatedAt) {
+                resolvedUpdatedAt = fsRes.profileUpdatedAt;
+              }
+            }
+            const nextProfileTs = resolvedUpdatedAt || new Date().toISOString();
             setPhotoUrl(dataUrl);
-            updateUser({ photoUrl: dataUrl });
+            setProfileUpdatedAt(nextProfileTs);
+            updateUser({ photoUrl: dataUrl, profileUpdatedAt: nextProfileTs });
+            setSuccessNotice('Profile photo updated successfully!');
+            setTimeout(() => setSuccessNotice(null), 3000);
+          } catch (err: any) {
+            setErrorNotice(err?.message || 'Failed to upload profile photo.');
           }
         }
       };
@@ -253,7 +273,7 @@ export const ProfilePage: React.FC = () => {
     }
   };
 
-  // Client-side PDF extraction using pdf.js + Firestore text persistence
+  // Client-side PDF extraction using pdf.js + Firestore serverTimestamp() persistence
   const handleResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     // Reset input value so re-selecting the same PDF file triggers onChange again
@@ -269,12 +289,9 @@ export const ProfilePage: React.FC = () => {
 
     try {
       const extracted = await extractPdfResumeText(file);
-      const updatedAt = new Date().toISOString();
 
       setResumeText(extracted.text);
       setResumeFileName(extracted.fileName);
-      setResumeUpdatedAt(updatedAt);
-      setResumeSectionSuccess('Resume loaded ✓');
 
       if (typeof auth.authStateReady === 'function') {
         await auth.authStateReady();
@@ -282,11 +299,23 @@ export const ProfilePage: React.FC = () => {
 
       const currentUser = auth.currentUser;
       if (!currentUser) {
-        updateUser({
-          resumeFileName: extracted.fileName,
-          resumeText: extracted.text,
-          resumeUpdatedAt: updatedAt,
-        });
+        if (authToken) {
+          const apiRes = await uploadResumeApi(authToken, {
+            resumeFileName: extracted.fileName,
+            resumeText: extracted.text,
+          });
+          const serverTs = apiRes?.resumeUpdatedAt || apiRes?.user?.resumeUpdatedAt || new Date().toISOString();
+          setResumeUpdatedAt(serverTs);
+          updateUser({
+            resumeFileName: extracted.fileName,
+            resumeText: extracted.text,
+            resumeUpdatedAt: serverTs,
+          });
+          setResumeSectionSuccess('Resume loaded & saved ✓');
+          setSuccessNotice('Resume loaded & saved ✓');
+          return;
+        }
+        setResumeSectionSuccess('Resume loaded ✓');
         setResumeSignInPrompt('Sign in to save your resume.');
         return;
       }
@@ -294,7 +323,6 @@ export const ProfilePage: React.FC = () => {
       const saved = await saveExtractedResumeToFirestore(currentUser.uid, {
         fileName: extracted.fileName,
         text: extracted.text,
-        updatedAt,
       });
 
       setResumeFileName(saved.fileName);
@@ -317,6 +345,7 @@ export const ProfilePage: React.FC = () => {
         });
       }
 
+      setResumeSectionSuccess('Resume loaded ✓');
       setSuccessNotice('Resume loaded ✓');
     } catch (err: any) {
       const msg =
@@ -423,17 +452,80 @@ export const ProfilePage: React.FC = () => {
     };
 
     try {
-      const saveTasks: Promise<any>[] = [];
-      if (authToken) {
-        saveTasks.push(updateProfileApi(authToken, updatedData));
+      let nextResumeUpdatedAt = resumeUpdatedAt;
+      let nextResumeFileName = resumeFileName;
+      const resumeTextChanged = resumeText.trim() !== (user?.resumeText || '').trim();
+
+      if (resumeTextChanged && resumeText.trim().length > 0) {
+        const effectiveFileName = resumeFileName || 'resume.txt';
+        if (auth.currentUser && auth.currentUser.uid === user?.id) {
+          const savedResume = await saveExtractedResumeToFirestore(auth.currentUser.uid, {
+            fileName: effectiveFileName,
+            text: resumeText.trim(),
+          });
+          nextResumeUpdatedAt = savedResume.updatedAt;
+          nextResumeFileName = savedResume.fileName;
+          if (authToken) {
+            uploadResumeApi(authToken, {
+              resumeFileName: savedResume.fileName,
+              resumeText: savedResume.text,
+              resumeUpdatedAt: savedResume.updatedAt,
+            }).catch(() => {});
+          }
+        } else if (authToken) {
+          const resumeRes = await uploadResumeApi(authToken, {
+            resumeFileName: effectiveFileName,
+            resumeText: resumeText.trim(),
+          });
+          nextResumeUpdatedAt = resumeRes?.resumeUpdatedAt || resumeRes?.user?.resumeUpdatedAt || new Date().toISOString();
+          nextResumeFileName = effectiveFileName;
+        }
       }
-      if (auth.currentUser) {
-        saveTasks.push(syncUserProfileToFirestore(auth.currentUser.uid, updatedData));
+
+      const payloadToPersist = {
+        ...updatedData,
+        resumeFileName: nextResumeFileName,
+        resumeUpdatedAt: nextResumeUpdatedAt,
+      };
+
+      let fsResult: any = null;
+      let apiResult: any = null;
+
+      const saveTasks: Promise<void>[] = [];
+      if (auth.currentUser && auth.currentUser.uid === user?.id) {
+        saveTasks.push(
+          syncUserProfileToFirestore(auth.currentUser.uid, payloadToPersist, { markProfileUpdated: true }).then((res) => {
+            fsResult = res;
+          })
+        );
+      }
+      if (authToken) {
+        saveTasks.push(
+          updateProfileApi(authToken, { ...payloadToPersist, markProfileUpdated: true }).then((res) => {
+            apiResult = res;
+          })
+        );
       }
       if (saveTasks.length > 0) {
         await Promise.all(saveTasks);
       }
-      updateUser(updatedData);
+
+      const nextProfileUpdatedAt =
+        fsResult?.profileUpdatedAt ||
+        apiResult?.profileUpdatedAt ||
+        apiResult?.user?.profileUpdatedAt ||
+        fsResult?.updatedAt ||
+        new Date().toISOString();
+
+      setProfileUpdatedAt(nextProfileUpdatedAt);
+      setResumeFileName(nextResumeFileName);
+      setResumeUpdatedAt(nextResumeUpdatedAt);
+
+      updateUser({
+        ...payloadToPersist,
+        profileUpdatedAt: nextProfileUpdatedAt,
+        updatedAt: nextProfileUpdatedAt,
+      });
       setIsSaved(true);
       setSuccessNotice('Profile saved! AI internship recommendations are updating automatically for your updated skills & goals.');
       setTimeout(() => {
@@ -460,12 +552,26 @@ export const ProfilePage: React.FC = () => {
       liveLink: newProject.liveLink.trim() || undefined
     };
     try {
-      if (authToken) {
-        await saveStudentProjectApi(authToken, proj);
-      }
       const updated = [proj, ...projects];
+      let resolvedUpdatedAt = '';
+      if (authToken) {
+        const res = await saveStudentProjectApi(authToken, proj);
+        resolvedUpdatedAt = res?.profileUpdatedAt || res?.user?.profileUpdatedAt || '';
+      }
+      if (auth.currentUser && auth.currentUser.uid === user?.id) {
+        const fsRes = await syncUserProfileToFirestore(
+          auth.currentUser.uid,
+          { projects: updated },
+          { markProfileUpdated: true }
+        );
+        if (fsRes?.profileUpdatedAt) {
+          resolvedUpdatedAt = fsRes.profileUpdatedAt;
+        }
+      }
+      const nextProfileTs = resolvedUpdatedAt || new Date().toISOString();
       setProjects(updated);
-      updateUser({ projects: updated });
+      setProfileUpdatedAt(nextProfileTs);
+      updateUser({ projects: updated, profileUpdatedAt: nextProfileTs });
       setShowAddProjectModal(false);
       setNewProject({ title: '', description: '', technologies: '', githubLink: '', liveLink: '' });
       setSuccessNotice('Project added to your portfolio successfully!');
@@ -745,14 +851,25 @@ export const ProfilePage: React.FC = () => {
             </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="px-6 py-2.5 bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white text-xs font-bold rounded-2xl shadow-md shadow-orange-500/20 hover:shadow-orange-500/35 transition-all flex items-center gap-1.5 self-center md:self-start cursor-pointer disabled:opacity-50"
-          >
-            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : isSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-            <span>{isSaved ? 'Saved Successfully!' : 'Save Profile Changes'}</span>
-          </button>
+          <div className="flex flex-col items-center md:items-end gap-2 self-center md:self-start">
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="px-6 py-2.5 bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white text-xs font-bold rounded-2xl shadow-md shadow-orange-500/20 hover:shadow-orange-500/35 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : isSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+              <span>{isSaved ? 'Saved Successfully!' : 'Save Profile Changes'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Profile Last Updated Status Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-2 -mt-3">
+          <LastUpdatedBadge
+            label="Profile"
+            timestamp={profileUpdatedAt}
+            emptyText="Not updated yet"
+          />
         </div>
 
         {/* Personal & Academic Details */}
@@ -1341,11 +1458,7 @@ export const ProfilePage: React.FC = () => {
                     : 'No PDF resume loaded yet'}
                 </span>
                 <span className="text-[10px] text-slate-400 block">
-                  {resumeFileName
-                    ? `Upload a PDF (up to 5 MB). Text is extracted on your device.${
-                        resumeUpdatedAt ? ` • Updated ${new Date(resumeUpdatedAt).toLocaleDateString()}` : ''
-                      }`
-                    : 'Upload a PDF (up to 5 MB). Text is extracted on your device.'}
+                  Upload a PDF (up to 5 MB). Text is extracted on your device.
                 </span>
               </div>
             </div>
@@ -1375,6 +1488,15 @@ export const ProfilePage: React.FC = () => {
               onChange={(e) => setResumeText(e.target.value)}
               placeholder="Upload a PDF to extract text automatically, or paste your resume text manually..."
               className="w-full p-3 text-xs font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl outline-hidden focus:border-[#FF7A00] text-slate-800 dark:text-slate-200"
+            />
+          </div>
+
+          {/* Resume Last Updated Footer */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-700/80 flex flex-wrap items-center justify-between gap-2">
+            <LastUpdatedBadge
+              label="Resume"
+              timestamp={resumeUpdatedAt}
+              emptyText="Not uploaded yet"
             />
           </div>
         </div>

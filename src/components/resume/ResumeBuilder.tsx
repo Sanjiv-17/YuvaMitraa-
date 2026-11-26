@@ -18,10 +18,16 @@ import {
   FileCheck,
   ChevronRight,
   TrendingUp,
-  FileUp
+  FileUp,
+  Save,
+  GraduationCap,
+  Briefcase,
+  FolderGit2
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { ResumeAnalysisResult, StudentProject } from '../../types';
 import { reviewResumeWithATS, uploadResumeApi, generateResumeFromProfile, enhanceResumeBullet } from '../../services/api';
+import { suggestResourcesForMissingSkills } from '../../services/matchingEngine';
 import { extractPdfResumeText } from '../../utils/resumeParser';
 import {
   auth,
@@ -29,6 +35,7 @@ import {
   saveExtractedResumeToFirestore,
   getSavedResumeFromFirestore
 } from '../../services/firebase';
+import { LastUpdatedBadge } from '../common/LastUpdatedBadge';
 
 const RESUME_PRESETS = [
   {
@@ -118,22 +125,15 @@ Mumbai University | Aggregate: 82%`
 ];
 
 export const ResumeBuilder: React.FC = () => {
-  const { user, updateUser, authToken, courses } = useApp();
+  const { user, updateUser, authToken, courses, setSelectedCourseForPlayer, setActiveTab } = useApp();
 
-  const [targetRole, setTargetRole] = useState('Frontend React Developer / Intern');
+  const [targetRole, setTargetRole] = useState(user?.preferredRoles?.[0] || 'Frontend React Developer / Intern');
   const [resumeText, setResumeText] = useState(user?.resumeText || '');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isSavingResume, setIsSavingResume] = useState(false);
+  const [profileSyncedNotice, setProfileSyncedNotice] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  const [atsResult, setAtsResult] = useState<{
-    atsScore: number;
-    overallVerdict: string;
-    formattingScore: number;
-    contentScore: number;
-    strengths: string[];
-    improvements: string[];
-    missingKeywords: string[];
-    rewrittenHeadline: string;
-  } | null>(null);
+  const [atsResult, setAtsResult] = useState<ResumeAnalysisResult | null>(null);
 
   // Bullet Enhancer states
   const [rawBullet, setRawBullet] = useState('');
@@ -152,14 +152,22 @@ export const ResumeBuilder: React.FC = () => {
   const [signInPrompt, setSignInPrompt] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // On page load (and auth changes), auto-fill Resume Content if signed-in user has a saved resume
+  // On page load (and auth changes), auto-fill Resume Content strictly for the authenticated user's UID
   React.useEffect(() => {
     let cancelled = false;
+    const expectedUid = user?.id;
+    if (!expectedUid) {
+      setResumeText('');
+      setSavedResumeName(null);
+      return;
+    }
 
     const loadSavedResume = async (uid: string) => {
+      if (!uid || uid !== expectedUid) return;
       try {
         const saved = await getSavedResumeFromFirestore(uid);
         if (cancelled) return;
+        if (!auth.currentUser || auth.currentUser.uid !== uid || user?.id !== uid) return;
         if (saved && saved.text) {
           setResumeText(saved.text);
           setSavedResumeName(saved.fileName || 'resume.pdf');
@@ -177,15 +185,18 @@ export const ResumeBuilder: React.FC = () => {
       }
     };
 
-    if (auth.currentUser) {
+    if (auth.currentUser && auth.currentUser.uid === expectedUid) {
       void loadSavedResume(auth.currentUser.uid);
+    } else {
+      setResumeText(user?.resumeText || '');
+      setSavedResumeName(user?.resumeFileName || null);
     }
 
     const unsub = onAuthStateChanged(auth, (fbUser) => {
-      if (fbUser) {
+      if (fbUser && fbUser.uid === expectedUid) {
         setSignInPrompt(null);
         void loadSavedResume(fbUser.uid);
-      } else {
+      } else if (!fbUser) {
         setSavedResumeName(null);
       }
     });
@@ -194,9 +205,9 @@ export const ResumeBuilder: React.FC = () => {
       cancelled = true;
       unsub();
     };
-  }, []);
+  }, [user?.id]);
 
-  // Generate complete resume from student profile
+  // Generate complete resume from student profile & record updated timestamp on save
   const handleGenerateFromProfile = async () => {
     setIsGeneratingProfile(true);
     setResumeError(null);
@@ -204,9 +215,45 @@ export const ResumeBuilder: React.FC = () => {
       const data = await generateResumeFromProfile(user, targetRole);
       if (data && data.resumeText) {
         setResumeText(data.resumeText);
+        const generatedFileName = savedResumeName || `${(user?.name || 'Resume').replace(/\s+/g, '_')}_AI_Resume.txt`;
+        let nextUpdatedAt = user?.resumeUpdatedAt || '';
+
+        if (auth.currentUser && auth.currentUser.uid === user?.id) {
+          try {
+            const saved = await saveExtractedResumeToFirestore(auth.currentUser.uid, {
+              fileName: generatedFileName,
+              text: data.resumeText,
+            });
+            nextUpdatedAt = saved.updatedAt;
+            setSavedResumeName(saved.fileName);
+            if (authToken) {
+              uploadResumeApi(authToken, {
+                resumeFileName: saved.fileName,
+                resumeText: saved.text,
+                resumeUpdatedAt: saved.updatedAt,
+              }).catch(() => {});
+            }
+          } catch {
+            // Non-fatal if Firestore offline
+          }
+        } else if (authToken) {
+          try {
+            const apiRes = await uploadResumeApi(authToken, {
+              resumeFileName: generatedFileName,
+              resumeText: data.resumeText,
+            });
+            nextUpdatedAt = apiRes?.resumeUpdatedAt || apiRes?.user?.resumeUpdatedAt || new Date().toISOString();
+            setSavedResumeName(generatedFileName);
+          } catch {
+            // Non-fatal
+          }
+        }
+
         const currentBadges = user?.badges || [];
         updateUser({
+          resumeFileName: generatedFileName,
           resumeText: data.resumeText,
+          ...(nextUpdatedAt ? { resumeUpdatedAt: nextUpdatedAt } : {}),
           xpPoints: (user?.xpPoints ?? 0) + 100,
           badges: currentBadges.includes('AI Resume Pioneer') ? currentBadges : [...currentBadges, 'AI Resume Pioneer']
         });
@@ -218,7 +265,7 @@ export const ResumeBuilder: React.FC = () => {
     }
   };
 
-  // Extract PDF text in-browser via pdf.js and optionally save to Firestore (users/{uid}/resume/current)
+  // Extract PDF text in-browser via pdf.js and save with Firestore serverTimestamp() (users/{uid}/resume/current)
   const handleFileUpload = async (file: File) => {
     if (!file) return;
     setResumeError(null);
@@ -228,10 +275,8 @@ export const ResumeBuilder: React.FC = () => {
 
     try {
       const extracted = await extractPdfResumeText(file);
-      const updatedAt = new Date().toISOString();
 
       setResumeText(extracted.text);
-      setStatusMessage('Resume loaded ✓');
 
       if (typeof auth.authStateReady === 'function') {
         await auth.authStateReady();
@@ -239,11 +284,22 @@ export const ResumeBuilder: React.FC = () => {
 
       const currentUser = auth.currentUser;
       if (!currentUser) {
-        updateUser({
-          resumeFileName: extracted.fileName,
-          resumeText: extracted.text,
-          resumeUpdatedAt: updatedAt,
-        });
+        if (authToken) {
+          const apiRes = await uploadResumeApi(authToken, {
+            resumeFileName: extracted.fileName,
+            resumeText: extracted.text,
+          });
+          const serverTs = apiRes?.resumeUpdatedAt || apiRes?.user?.resumeUpdatedAt || new Date().toISOString();
+          setSavedResumeName(extracted.fileName);
+          updateUser({
+            resumeFileName: extracted.fileName,
+            resumeText: extracted.text,
+            resumeUpdatedAt: serverTs,
+          });
+          setStatusMessage('Resume loaded & saved ✓');
+          return;
+        }
+        setStatusMessage('Resume loaded ✓');
         setSignInPrompt('Sign in to save your resume.');
         return;
       }
@@ -251,7 +307,6 @@ export const ResumeBuilder: React.FC = () => {
       const saved = await saveExtractedResumeToFirestore(currentUser.uid, {
         fileName: extracted.fileName,
         text: extracted.text,
-        updatedAt,
       });
 
       setSavedResumeName(saved.fileName);
@@ -268,6 +323,8 @@ export const ResumeBuilder: React.FC = () => {
           resumeUpdatedAt: saved.updatedAt,
         }).catch(() => {});
       }
+
+      setStatusMessage('Resume loaded ✓');
     } catch (err: any) {
       setResumeError(
         err?.message ||
@@ -289,6 +346,7 @@ export const ResumeBuilder: React.FC = () => {
   const handleRunATSCheck = async () => {
     setIsAnalyzing(true);
     setResumeError(null);
+    setProfileSyncedNotice(null);
     try {
       const data = await reviewResumeWithATS(resumeText, targetRole);
       setAtsResult(data);
@@ -299,10 +357,92 @@ export const ResumeBuilder: React.FC = () => {
         badges: currentBadges.includes('ATS Pro') ? currentBadges : [...currentBadges, 'ATS Pro']
       });
     } catch (err: any) {
-      setResumeError(err?.message || 'ATS evaluation failed. Please check your connection and try again.');
+      setResumeError(err?.message || 'Resume analysis failed. Please check your connection and try again.');
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  // Persist manual resume text edits under the authenticated user's UID with serverTimestamp
+  const handleSaveResumeEdits = async () => {
+    if (!resumeText.trim() || isSavingResume) return;
+    setIsSavingResume(true);
+    setResumeError(null);
+    setStatusMessage(null);
+    try {
+      const fileName = savedResumeName || `${(user?.name || 'Resume').replace(/\s+/g, '_')}_Resume.txt`;
+      let updatedIso = new Date().toISOString();
+      if (auth.currentUser && auth.currentUser.uid === user?.id) {
+        const saved = await saveExtractedResumeToFirestore(auth.currentUser.uid, {
+          fileName,
+          text: resumeText,
+        });
+        updatedIso = saved.updatedAt;
+        setSavedResumeName(saved.fileName);
+        if (authToken) {
+          uploadResumeApi(authToken, {
+            resumeFileName: saved.fileName,
+            resumeText: saved.text,
+            resumeUpdatedAt: saved.updatedAt,
+          }).catch(() => {});
+        }
+      } else if (authToken) {
+        const apiRes = await uploadResumeApi(authToken, {
+          resumeFileName: fileName,
+          resumeText,
+        });
+        updatedIso = apiRes?.resumeUpdatedAt || apiRes?.user?.resumeUpdatedAt || updatedIso;
+        setSavedResumeName(fileName);
+      }
+      updateUser({
+        resumeFileName: fileName,
+        resumeText,
+        resumeUpdatedAt: updatedIso,
+      });
+      setStatusMessage('Resume saved securely to your account ✓');
+    } catch (err: any) {
+      setResumeError(err?.message || 'Failed to save resume changes.');
+    } finally {
+      setIsSavingResume(false);
+    }
+  };
+
+  // Sync extracted resume skills, education, and projects into the student's profile
+  const handleSyncExtractedToProfile = () => {
+    const ext = atsResult?.extractedProfile;
+    if (!ext) return;
+
+    const mergedSkills = Array.from(
+      new Set([
+        ...(user?.skills || []),
+        ...(Array.isArray(ext.skills) ? ext.skills.map(s => String(s).trim()).filter(Boolean) : []),
+      ])
+    ).slice(0, 40);
+
+    const existingProjects = user?.projects || [];
+    const existingTitles = new Set(existingProjects.map(p => p.title.toLowerCase().trim()));
+    const newProjects: StudentProject[] = (Array.isArray(ext.projects) ? ext.projects : [])
+      .filter(p => p?.title && !existingTitles.has(p.title.toLowerCase().trim()))
+      .slice(0, 5)
+      .map((p, idx) => ({
+        id: `proj-res-${Date.now()}-${idx}`,
+        title: String(p.title).trim(),
+        description: String(p.summary || '').trim(),
+        technologies: Array.isArray(p.technologies) ? p.technologies.map(String) : [],
+      }));
+
+    const patch: Partial<typeof user> = {
+      skills: mergedSkills,
+      projects: [...existingProjects, ...newProjects],
+    };
+    if (!user?.education && Array.isArray(ext.education) && ext.education[0]) {
+      patch.education = String(ext.education[0]).slice(0, 120);
+    }
+
+    updateUser(patch);
+    setProfileSyncedNotice(
+      `Synced ${mergedSkills.length} skills${newProjects.length > 0 ? ` and ${newProjects.length} new project(s)` : ''} to your student profile.`
+    );
   };
 
   // 1-Click Insert Missing Keyword
@@ -311,7 +451,6 @@ export const ResumeBuilder: React.FC = () => {
       if (prev.includes(kw)) return prev;
       return `${prev}\n• Added Skill Keyword: ${kw}`;
     });
-    // Also add to profile skills
     const currentSkills = user?.skills || [];
     if (!currentSkills.includes(kw)) {
       updateUser({ skills: [...currentSkills, kw] });
@@ -411,7 +550,7 @@ export const ResumeBuilder: React.FC = () => {
             ) : (
               <Wand2 className="w-4 h-4 text-[#FF7A00]" />
             )}
-            <span>{isGeneratingProfile ? 'Generating with Gemini...' : 'Generate from Profile'}</span>
+            <span>{isGeneratingProfile ? 'Generating Resume...' : 'Generate from Profile'}</span>
           </button>
 
           <button
@@ -603,28 +742,50 @@ export const ResumeBuilder: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center justify-between pt-1">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <span className="text-[11px] text-slate-400">
-                Tip: Include numbers (e.g. &quot;increased speed by 25%&quot;)
+                Tip: Include measurable results (e.g. &quot;increased speed by 25%&quot;)
               </span>
 
-              <button
-                onClick={handleRunATSCheck}
-                disabled={isAnalyzing || !resumeText.trim()}
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white text-xs font-bold shadow-md shadow-orange-500/20 hover:shadow-orange-500/35 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-40"
-              >
-                {isAnalyzing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Analyzing with Gemini ATS...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>Scan with Gemini ATS</span>
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveResumeEdits}
+                  disabled={isSavingResume || !resumeText.trim()}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
+                >
+                  {isSavingResume ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FF7A00]" /> : <Save className="w-3.5 h-3.5 text-[#0284C7]" />}
+                  <span>{isSavingResume ? 'Saving...' : 'Save Resume'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleRunATSCheck}
+                  disabled={isAnalyzing || !resumeText.trim()}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#FF7A00] to-[#E06900] text-white text-xs font-bold shadow-md shadow-orange-500/20 hover:shadow-orange-500/35 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-40"
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Analyzing Resume...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Analyze Resume &amp; Skills</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Resume Last Updated Footer */}
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <LastUpdatedBadge
+                label="Resume"
+                timestamp={user?.resumeUpdatedAt}
+                emptyText="Not uploaded yet"
+              />
             </div>
 
           </div>
@@ -808,24 +969,128 @@ export const ResumeBuilder: React.FC = () => {
                 </ul>
               </div>
 
-              {/* Recommended Courses to Improve Eligibility */}
+              {/* Structured Resume Extraction: Education, Skills, Projects & Experience */}
+              {atsResult.extractedProfile && (
+                <div className="space-y-3 pt-2 border-t border-slate-100">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <FileCheck className="w-3.5 h-3.5 text-[#0284C7]" />
+                      <span>Extracted Resume Details:</span>
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={handleSyncExtractedToProfile}
+                      className="px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 text-[#0284C7] border border-sky-200 text-[11px] font-bold cursor-pointer transition-colors"
+                    >
+                      Sync to My Profile
+                    </button>
+                  </div>
+
+                  {profileSyncedNotice && (
+                    <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-semibold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>{profileSyncedNotice}</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-2.5 text-xs">
+                    {atsResult.extractedProfile.education && atsResult.extractedProfile.education.length > 0 && (
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                        <div className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                          <GraduationCap className="w-3.5 h-3.5 text-[#0284C7]" />
+                          <span>Education</span>
+                        </div>
+                        <ul className="space-y-0.5 text-[11px] text-slate-600">
+                          {atsResult.extractedProfile.education.map((ed, i) => (
+                            <li key={i}>• {ed}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {atsResult.extractedProfile.skills && atsResult.extractedProfile.skills.length > 0 && (
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5">
+                        <div className="text-[11px] font-bold text-slate-700">
+                          Detected Skills ({atsResult.extractedProfile.skills.length})
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {atsResult.extractedProfile.skills.slice(0, 18).map((sk, i) => (
+                            <span key={i} className="text-[10px] bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-md font-medium">
+                              {sk}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {atsResult.extractedProfile.projects && atsResult.extractedProfile.projects.length > 0 && (
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1.5">
+                        <div className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                          <FolderGit2 className="w-3.5 h-3.5 text-[#FF7A00]" />
+                          <span>Projects ({atsResult.extractedProfile.projects.length})</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          {atsResult.extractedProfile.projects.slice(0, 4).map((proj, i) => (
+                            <div key={i} className="text-[11px] text-slate-600">
+                              <span className="font-bold text-slate-800">{proj.title}</span>
+                              {proj.summary && <span className="block text-[10px] text-slate-500">{proj.summary}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {atsResult.extractedProfile.experience && atsResult.extractedProfile.experience.length > 0 && (
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                        <div className="text-[11px] font-bold text-slate-700 flex items-center gap-1.5">
+                          <Briefcase className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Experience</span>
+                        </div>
+                        <ul className="space-y-0.5 text-[11px] text-slate-600">
+                          {atsResult.extractedProfile.experience.map((exp, i) => (
+                            <li key={i}>• {exp}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Dynamically Matched Recommended Courses to Bridge Missing Skills */}
               <div className="space-y-2 pt-2 border-t border-slate-100">
                 <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                   <BookOpen className="w-3.5 h-3.5 text-[#FF7A00]" />
                   <span>Recommended Courses to Bridge Missing Skills:</span>
                 </h4>
                 <div className="space-y-2">
-                  {courses.slice(0, 2).map((crs: any) => (
-                    <div key={crs.id} className="p-2.5 rounded-xl bg-orange-50/70 border border-orange-200/80 flex items-center justify-between text-xs">
-                      <div>
-                        <p className="font-bold text-slate-800">{crs.title}</p>
-                        <p className="text-[10px] text-slate-500">{crs.modules.length} Modules • Certified</p>
-                      </div>
-                      <span className="text-[10px] font-bold text-[#FF7A00] bg-white px-2 py-0.5 rounded-md border border-orange-200">
-                        {crs.level}
-                      </span>
-                    </div>
-                  ))}
+                  {(() => {
+                    const gapSuggestions = suggestResourcesForMissingSkills(atsResult.missingKeywords || [], targetRole);
+                    const matchedCourses = gapSuggestions
+                      .map((s) => courses.find((c) => c.id === s.courseId))
+                      .filter(Boolean);
+                    const displayCourses = matchedCourses.length > 0 ? matchedCourses.slice(0, 3) : courses.slice(0, 2);
+
+                    return displayCourses.map((crs: any) => (
+                      <button
+                        key={crs.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCourseForPlayer(crs);
+                          setActiveTab('course-player');
+                        }}
+                        className="w-full text-left p-2.5 rounded-xl bg-orange-50/70 hover:bg-orange-100/70 border border-orange-200/80 flex items-center justify-between gap-2 text-xs transition-colors cursor-pointer"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-800 truncate">{crs.title}</p>
+                          <p className="text-[10px] text-slate-500">{crs.modules.length} Modules • Certified</p>
+                        </div>
+                        <span className="text-[10px] font-bold text-[#FF7A00] bg-white px-2 py-0.5 rounded-md border border-orange-200 shrink-0">
+                          Start →
+                        </span>
+                      </button>
+                    ));
+                  })()}
                 </div>
               </div>
 
@@ -836,10 +1101,10 @@ export const ResumeBuilder: React.FC = () => {
                 <Sparkles className="w-7 h-7" />
               </div>
               <h3 className="text-sm font-bold text-slate-800">
-                Ready for AI Resume Audit
+                Ready for Smart Resume Analysis
               </h3>
               <p className="text-xs text-slate-500 leading-relaxed max-w-xs mx-auto">
-                Click &quot;Scan with Gemini ATS&quot; to inspect your formatting, keyword density, and get customized recruiter advice.
+                Upload a PDF resume or paste your text, then click &quot;Analyze Resume &amp; Skills&quot; to extract education, skills, projects, experience, missing keywords, and improvement tips.
               </p>
             </div>
           )}

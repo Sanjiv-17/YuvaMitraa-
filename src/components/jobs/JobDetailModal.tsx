@@ -21,6 +21,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { Job, EligibilityResult } from '../../types';
 import { checkEligibility } from '../../services/api';
+import { jobToCandidate, scoreInternshipForStudent } from '../../services/matchingEngine';
 import { openExternalUrl } from '../../utils/navigation';
 import { isRemoteOrGlobalLocation } from '../../utils/opportunityFilter';
 
@@ -74,6 +75,7 @@ export const JobDetailModal: React.FC = () => {
   const isSaved = (savedJobIds || []).includes(job.id);
   const isRemoteOrGlobal = isRemoteOrGlobalLocation(job.location, job.type, job.opportunitySource);
   const distance = !isRemoteOrGlobal ? calculateDistance(job.coordinates) : 0;
+  const instantMatch = scoreInternshipForStudent(user, jobToCandidate(job));
 
   const handleRunEligibility = async () => {
     setIsCheckingAI(true);
@@ -228,6 +230,40 @@ export const JobDetailModal: React.FC = () => {
               )}
             </div>
 
+            {/* Instant Deterministic Eligibility & Missing Qualifications Snapshot */}
+            {!eligibilityResult && (
+              <div className="bg-white/95 dark:bg-slate-800 p-3.5 rounded-xl border border-orange-200/70 dark:border-slate-700 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-black text-slate-900 dark:text-white">
+                      {instantMatch.matchScore}% Match
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      instantMatch.eligibilityStatus === 'Eligible'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : instantMatch.eligibilityStatus === 'Partially Eligible'
+                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                    }`}>
+                      {instantMatch.eligibilityStatus || 'Partially Eligible'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    {instantMatch.matchedSkills.length}/{instantMatch.requiredSkills.length} required skills matched
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                  {instantMatch.matchReason}
+                </p>
+                {instantMatch.missingQualifications && instantMatch.missingQualifications.length > 0 && (
+                  <div className="text-[11px] text-amber-800 dark:text-amber-300 bg-amber-50/70 dark:bg-amber-950/30 p-2 rounded-lg border border-amber-200/70 dark:border-amber-800">
+                    <span className="font-bold">Missing Qualifications: </span>
+                    <span>{instantMatch.missingQualifications.join(' • ')}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {eligibilityError && (
               <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-between gap-2">
                 <span>{eligibilityError}</span>
@@ -315,7 +351,7 @@ export const JobDetailModal: React.FC = () => {
                 {/* AI Improvement Suggestions */}
                 <div className="bg-white p-3.5 rounded-xl border border-slate-200">
                   <div className="text-xs font-bold text-slate-800 mb-1.5">
-                    💡 Gemini AI Actionable Suggestions:
+                    AI Actionable Suggestions:
                   </div>
                   <ul className="space-y-1 text-xs text-slate-600 list-disc list-inside">
                     {(eligibilityResult.suggestions || []).map((sug, sIdx) => (

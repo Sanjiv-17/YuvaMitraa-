@@ -45,6 +45,12 @@ service cloud.firestore {
       );
     }
 
+    function isValidTimestampOpt(data, key) {
+      return !(key in data) ||
+        (data[key] is timestamp) ||
+        (data[key] is string && data[key].size() <= 64);
+    }
+
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'role', 'email', 'createdAt']) &&
         data.keys().hasOnly([
@@ -54,15 +60,17 @@ service cloud.firestore {
           'industry', 'companyWebsite', 'cinOrRegistrationNumber', 'currentRole', 'yearsOfExperience',
           'location', 'preferredLocation', 'workModePreference', 'age', 'skills', 'nonTechnicalSkills',
           'interests', 'preferredRoles', 'preferredDomain', 'careerGoals', 'githubUrl', 'linkedinUrl',
-          'portfolioUrl', 'resumeFileName', 'resumeUpdatedAt', 'photoUrl', 'streakDays', 'xpPoints', 'badges',
-          'savedJobIds', 'enrolledCourses', 'createdAt', 'updatedAt'
+          'portfolioUrl', 'resumeFileName', 'resumeUpdatedAt', 'profileUpdatedAt', 'photoUrl',
+          'streakDays', 'xpPoints', 'badges', 'savedJobIds', 'enrolledCourses', 'projects',
+          'createdAt', 'updatedAt'
         ]) &&
         data.uid is string && data.uid.size() > 0 && data.uid.size() <= 128 &&
         (!('name' in data) || (data.name is string && data.name.size() > 0 && data.name.size() <= 100)) &&
         data.email is string && data.email.size() > 0 && data.email.size() <= 160 &&
         data.role in ['student', 'recruiter', 'experienced', 'college', 'admin'] &&
         data.createdAt is string && data.createdAt.size() > 0 && data.createdAt.size() <= 64 &&
-        isValidStringOpt(data, 'updatedAt', 64) &&
+        isValidTimestampOpt(data, 'updatedAt') &&
+        isValidTimestampOpt(data, 'profileUpdatedAt') &&
         isValidStringOpt(data, 'phone', 32) &&
         isValidStringOpt(data, 'college', 200) &&
         isValidStringOpt(data, 'institution', 200) &&
@@ -91,7 +99,7 @@ service cloud.firestore {
         isValidStringOpt(data, 'linkedinUrl', 300) &&
         isValidStringOpt(data, 'portfolioUrl', 300) &&
         isValidStringOpt(data, 'resumeFileName', 200) &&
-        isValidStringOpt(data, 'resumeUpdatedAt', 64) &&
+        isValidTimestampOpt(data, 'resumeUpdatedAt') &&
         isValidStringOpt(data, 'photoUrl', 1000) &&
         (!('cgpa' in data) || (data.cgpa is string && data.cgpa.size() <= 20) || (data.cgpa is number && data.cgpa >= 0 && data.cgpa <= 100)) &&
         (!('graduationYear' in data) || (data.graduationYear is string && data.graduationYear.size() <= 16) || (data.graduationYear is number && data.graduationYear >= 1950 && data.graduationYear <= 2100)) &&
@@ -104,7 +112,8 @@ service cloud.firestore {
         isValidStringListOpt(data, 'preferredRoles', 30) &&
         isValidStringListOpt(data, 'badges', 50) &&
         isValidStringListOpt(data, 'savedJobIds', 200) &&
-        (!('enrolledCourses' in data) || (data.enrolledCourses is list && data.enrolledCourses.size() <= 100));
+        (!('enrolledCourses' in data) || (data.enrolledCourses is list && data.enrolledCourses.size() <= 100)) &&
+        (!('projects' in data) || (data.projects is list && data.projects.size() <= 50));
     }
 
     function isValidJob(data) {
@@ -127,11 +136,33 @@ service cloud.firestore {
 
     function isValidApplication(data) {
       return data.keys().hasAll(['id', 'jobId', 'userId', 'status', 'appliedDate']) &&
+        data.keys().hasOnly([
+          'id', 'jobId', 'userId', 'jobTitle', 'company',
+          'candidateName', 'candidateEmail', 'candidatePhone', 'candidateCollege',
+          'status', 'appliedDate', 'updatedDate', 'coverLetter', 'matchScore',
+          'interviewDate', 'interviewTime', 'interviewMode', 'interviewLinkOrVenue',
+          'recruiterFeedback', 'notes'
+        ]) &&
         data.id is string && data.id.size() > 0 && data.id.size() <= 128 &&
         data.jobId is string && data.jobId.size() > 0 && data.jobId.size() <= 128 &&
         data.userId is string && data.userId.size() > 0 && data.userId.size() <= 128 &&
         data.status in ['Applied', 'Under Review', 'Shortlisted', 'Interview', 'Selected', 'Rejected'] &&
-        data.appliedDate is string && data.appliedDate.size() > 0 && data.appliedDate.size() <= 64;
+        data.appliedDate is string && data.appliedDate.size() > 0 && data.appliedDate.size() <= 64 &&
+        isValidStringOpt(data, 'jobTitle', 200) &&
+        isValidStringOpt(data, 'company', 200) &&
+        isValidStringOpt(data, 'candidateName', 120) &&
+        isValidStringOpt(data, 'candidateEmail', 160) &&
+        isValidStringOpt(data, 'candidatePhone', 32) &&
+        isValidStringOpt(data, 'candidateCollege', 200) &&
+        isValidStringOpt(data, 'updatedDate', 64) &&
+        isValidStringOpt(data, 'coverLetter', 3000) &&
+        (!('matchScore' in data) || (data.matchScore is number && data.matchScore >= 0 && data.matchScore <= 100)) &&
+        isValidStringOpt(data, 'interviewDate', 32) &&
+        isValidStringOpt(data, 'interviewTime', 32) &&
+        isValidStringOpt(data, 'interviewMode', 64) &&
+        isValidStringOpt(data, 'interviewLinkOrVenue', 300) &&
+        isValidStringOpt(data, 'recruiterFeedback', 1000) &&
+        isValidStringOpt(data, 'notes', 1000);
     }
 
     function isValidSavedResume(data) {
@@ -139,7 +170,7 @@ service cloud.firestore {
         data.keys().hasOnly(['fileName', 'text', 'updatedAt']) &&
         data.fileName is string && data.fileName.size() > 0 && data.fileName.size() <= 200 &&
         data.text is string && data.text.size() > 0 && data.text.size() <= 150000 &&
-        data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64;
+        data.updatedAt is timestamp && data.updatedAt == request.time;
     }
 
     function isValidSavedRecommendations(data, userId) {
@@ -152,6 +183,30 @@ service cloud.firestore {
         data.updatedAt is string && data.updatedAt.size() > 0 && data.updatedAt.size() <= 64;
     }
 
+    function isValidUserCertificate(data, userId, certificateId) {
+      return data.keys().hasAll(['id', 'userId', 'certificateCode', 'studentName', 'courseTitle', 'issueDate']) &&
+        data.keys().hasOnly([
+          'id', 'userId', 'certificateCode', 'studentName', 'courseId', 'courseTitle',
+          'issueDate', 'scorePercentage', 'qrData', 'instructor', 'source', 'issuer',
+          'credentialUrl', 'fileName', 'createdAt'
+        ]) &&
+        data.id is string && data.id == certificateId &&
+        data.userId is string && data.userId == userId &&
+        data.certificateCode is string && data.certificateCode.size() > 0 && data.certificateCode.size() <= 80 &&
+        data.studentName is string && data.studentName.size() > 0 && data.studentName.size() <= 120 &&
+        isValidStringOpt(data, 'courseId', 128) &&
+        data.courseTitle is string && data.courseTitle.size() > 0 && data.courseTitle.size() <= 200 &&
+        data.issueDate is string && data.issueDate.size() > 0 && data.issueDate.size() <= 64 &&
+        (!('scorePercentage' in data) || (data.scorePercentage is number && data.scorePercentage >= 0 && data.scorePercentage <= 100)) &&
+        isValidStringOpt(data, 'qrData', 500) &&
+        isValidStringOpt(data, 'instructor', 160) &&
+        (!('source' in data) || data.source in ['earned', 'uploaded']) &&
+        isValidStringOpt(data, 'issuer', 160) &&
+        isValidStringOpt(data, 'credentialUrl', 500) &&
+        isValidStringOpt(data, 'fileName', 200) &&
+        isValidStringOpt(data, 'createdAt', 64);
+    }
+
     // User profiles - private PII isolation; users cannot select admin on signup or edit their own role field
     match /users/{userId} {
       allow get: if isOwner(userId) || isAdmin();
@@ -160,12 +215,18 @@ service cloud.firestore {
         isValidId(userId) &&
         isValidUser(request.resource.data) &&
         request.resource.data.uid == userId &&
+        (!('updatedAt' in request.resource.data) || !(request.resource.data.updatedAt is timestamp) || request.resource.data.updatedAt == request.time) &&
+        (!('profileUpdatedAt' in request.resource.data) || (request.resource.data.profileUpdatedAt is timestamp && request.resource.data.profileUpdatedAt == request.time)) &&
+        (!('resumeUpdatedAt' in request.resource.data) || !(request.resource.data.resumeUpdatedAt is timestamp) || request.resource.data.resumeUpdatedAt == request.time) &&
         (request.resource.data.role in ['student', 'recruiter', 'experienced'] || isAdmin());
       allow update: if (isOwner(userId) || isAdmin()) &&
         isValidId(userId) &&
         isValidUser(request.resource.data) &&
         request.resource.data.uid == resource.data.uid &&
         request.resource.data.createdAt == resource.data.createdAt &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['updatedAt']) || !(request.resource.data.updatedAt is timestamp) || request.resource.data.updatedAt == request.time) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['profileUpdatedAt']) || (request.resource.data.profileUpdatedAt is timestamp && request.resource.data.profileUpdatedAt == request.time)) &&
+        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['resumeUpdatedAt']) || (request.resource.data.resumeUpdatedAt is timestamp && request.resource.data.resumeUpdatedAt == request.time) || (request.resource.data.resumeUpdatedAt is string && request.resource.data.resumeUpdatedAt == '')) &&
         (
           isAdmin() ||
           (
@@ -193,6 +254,21 @@ service cloud.firestore {
           recDocId == 'current' &&
           isValidSavedRecommendations(request.resource.data, userId);
         allow delete: if (isOwner(userId) || isAdmin()) && recDocId == 'current';
+      }
+
+      // Strictly private user certificates (earned & uploaded) isolated per authenticated UID
+      match /certificates/{certificateId} {
+        allow get: if isValidId(certificateId) && (isOwner(userId) || isAdmin());
+        allow list: if (isOwner(userId) && resource.data.userId == request.auth.uid) || isAdmin();
+        allow create: if isOwner(userId) &&
+          isValidId(certificateId) &&
+          isValidUserCertificate(request.resource.data, userId, certificateId);
+        allow update: if (isOwner(userId) || isAdmin()) &&
+          isValidId(certificateId) &&
+          isValidUserCertificate(request.resource.data, userId, certificateId) &&
+          request.resource.data.userId == resource.data.userId &&
+          request.resource.data.id == resource.data.id;
+        allow delete: if isValidId(certificateId) && (isOwner(userId) || isAdmin());
       }
     }
 

@@ -75,6 +75,8 @@ export interface UserProfile {
   resumeText: string;
   resumeFileName: string;
   resumeUpdatedAt?: string;
+  profileUpdatedAt?: string;
+  updatedAt?: string;
   streakDays: number;
   xpPoints: number;
   badges: string[];
@@ -276,6 +278,7 @@ export interface Course {
 
 export interface Certificate {
   id: string;
+  userId?: string;
   certificateCode: string;
   studentName: string;
   courseId: string;
@@ -284,6 +287,10 @@ export interface Certificate {
   scorePercentage: number;
   qrData: string;
   instructor: string;
+  source?: 'earned' | 'uploaded';
+  issuer?: string;
+  credentialUrl?: string;
+  fileName?: string;
 }
 
 export interface GovernmentScheme {
@@ -461,6 +468,8 @@ export interface InternshipRecommendation {
   isVerified: boolean;
   matchScore: number;
   matchTier: 'Excellent' | 'Very Good' | 'Good' | 'Moderate' | 'Low Match';
+  eligibilityStatus?: 'Eligible' | 'Partially Eligible' | 'Needs Upskilling';
+  missingQualifications?: string[];
   breakdown: InternshipMatchBreakdown;
   matchReason: string;
   matchedSkills: string[];
@@ -479,4 +488,30 @@ export interface StudentRecommendationBundle {
   beginnerFriendlyCount: number;
   updatedAt: string;
 }
+
+export interface ResumeExtractedProject {
+  title: string;
+  summary: string;
+  technologies: string[];
+}
+
+export interface ResumeExtractedProfile {
+  education: string[];
+  skills: string[];
+  projects: ResumeExtractedProject[];
+  experience: string[];
+}
+
+export interface ResumeAnalysisResult {
+  atsScore: number;
+  overallVerdict: string;
+  formattingScore: number;
+  contentScore: number;
+  strengths: string[];
+  improvements: string[];
+  missingKeywords: string[];
+  rewrittenHeadline: string;
+  extractedProfile?: ResumeExtractedProfile;
+}
+
 

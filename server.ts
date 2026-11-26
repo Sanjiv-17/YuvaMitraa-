@@ -391,6 +391,8 @@ interface UserRecord {
   resumeFileName?: string;
   resumeText?: string;
   resumeUpdatedAt?: string;
+  profileUpdatedAt?: string;
+  updatedAt?: string;
   enrolledCourses?: Array<{ courseId: string; completedModuleIds: string[]; passed?: boolean; finalScore?: number; certificateId?: string }>;
   savedJobIds?: string[];
   badges?: string[];
@@ -603,139 +605,9 @@ interface JobRecord {
   isGovernmentSponsored?: boolean;
 }
 
-const jobsDatabase: JobRecord[] = [
-  {
-    id: 'job-1',
-    title: 'Frontend React Developer Intern',
-    company: 'BharatTech Innovations',
-    companyLogo: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=120&q=80',
-    creatorId: 'usr-recruiter-1',
-    creatorRole: 'recruiter',
-    location: 'Okhla Phase III, New Delhi',
-    city: 'New Delhi',
-    coordinates: { lat: 28.5355, lng: 77.2715 },
-    type: 'internship',
-    category: 'Tech',
-    stipend: '₹20,000 / month',
-    stipendAmount: 20000,
-    duration: '6 Months',
-    requiredSkills: ['React', 'JavaScript', 'Tailwind CSS', 'Git', 'REST APIs'],
-    eligibility: 'B.Tech / B.E. / BCA / MCA students graduating in 2025, 2026 or 2027. Minimum 60% in current degree.',
-    description: 'Join our fintech core product engineering team building next-generation digital inclusion payment portals. You will receive direct 1-on-1 mentorship from senior software engineers and build customer-facing React components.',
-    responsibilities: [
-      'Build modular, accessible React UI components using modern hooks and state management',
-      'Integrate authenticated backend REST APIs with robust error handling and loading indicators',
-      'Optimize web vitals for low-bandwidth mobile connections across India',
-      'Participate in agile sprint rituals, design reviews, and automated testing'
-    ],
-    perks: ['Pre-Placement Offer (PPO) potential', 'Direct Mentorship from Tech Lead', 'Official Experience Certificate', 'Flexible Work Timings'],
-    deadline: '2026-12-15',
-    applicantsCount: 43,
-    postedDate: '2 days ago',
-    isVerified: true,
-    verificationStatus: 'approved',
-    verificationEvidence: 'Corporate Employer CIN: U72200DL2021PTC384729 Verified & Active',
-    opportunitySource: 'Direct Employer'
-  },
-  {
-    id: 'job-2',
-    title: 'Python & AI Engineering Intern',
-    company: 'DataVyuha Labs',
-    companyLogo: 'https://images.unsplash.com/photo-1531482615713-2afd69097998?auto=format&fit=crop&w=120&q=80',
-    creatorId: 'usr-recruiter-1',
-    creatorRole: 'recruiter',
-    location: 'Noida Sector 62',
-    city: 'Noida',
-    coordinates: { lat: 28.6280, lng: 77.3649 },
-    type: 'internship',
-    category: 'Tech',
-    stipend: '₹22,000 / month',
-    stipendAmount: 22000,
-    duration: '4 Months',
-    requiredSkills: ['Python', 'SQL', 'FastAPI', 'Pandas', 'LLM Prompts'],
-    eligibility: 'Engineering / Data Science students with strong problem-solving skills and Python fundamentals.',
-    description: 'Work on cutting-edge applied artificial intelligence, document extraction, and semantic search agents for enterprise clients.',
-    responsibilities: [
-      'Implement data preprocessing scripts in Python and Pandas',
-      'Evaluate model completions, accuracy, and retrieval augmented generation pipelines',
-      'Document API benchmarks and deploy containerized services'
-    ],
-    perks: ['High-impact AI projects', 'Performance Bonus', 'Letter of Recommendation'],
-    deadline: '2026-12-20',
-    applicantsCount: 31,
-    postedDate: 'Yesterday',
-    isVerified: true,
-    verificationStatus: 'approved',
-    verificationEvidence: 'Startup India Verified DIPP Entity & MCA Registered',
-    opportunitySource: 'Direct Employer'
-  },
-  {
-    id: 'job-3',
-    title: 'Campus Placement Drive: Associate Software Engineer',
-    company: 'NIT Delhi Placement Cell / Partner Consortium',
-    companyLogo: 'https://images.unsplash.com/photo-1542744173-8e7e53415bb0?auto=format&fit=crop&w=120&q=80',
-    creatorId: 'usr-college-1',
-    creatorRole: 'college',
-    collegeId: 'col-1',
-    targetColleges: ['National Institute of Technology Delhi', 'University of Delhi (North Campus)'],
-    location: 'NIT Delhi Campus, Narela',
-    city: 'New Delhi',
-    coordinates: { lat: 28.8427, lng: 77.1025 },
-    type: 'full-time',
-    category: 'Tech',
-    stipend: '₹45,000 / month (₹6.5 LPA CTC)',
-    stipendAmount: 45000,
-    duration: 'Full-Time Employment',
-    requiredSkills: ['Data Structures & Algorithms', 'Java or C++', 'SQL', 'Computer Networks'],
-    eligibility: 'Exclusively open for 2025/2026 Batch registered students of NIT Delhi and affiliated consortium colleges. CGPA >= 7.0 with no active backlogs.',
-    description: 'Official on-campus and pool recruitment drive organized by the Training & Placement Cell. Shortlisted students will attend written tests followed by technical interviews at the campus placement block.',
-    responsibilities: [
-      'Design and implement scalable backend microservices',
-      'Participate in enterprise software testing and deployment pipelines',
-      'Collaborate with international delivery teams'
-    ],
-    perks: ['Day-1 Placement Assurance', 'Health Insurance', 'Signing Bonus'],
-    deadline: '2026-12-05',
-    applicantsCount: 112,
-    postedDate: '3 days ago',
-    isVerified: true,
-    verificationStatus: 'approved',
-    verificationEvidence: 'Verified by NIT Delhi Training & Placement Cell (AISHE: U-0610)',
-    opportunitySource: 'College Placement Cell'
-  },
-  {
-    id: 'job-4',
-    title: 'Government National Internship: Youth Skill Mission',
-    company: 'Ministry of Corporate Affairs & Youth Mission',
-    companyLogo: 'https://images.unsplash.com/photo-1579389083078-4e7018379f7e?auto=format&fit=crop&w=120&q=80',
-    creatorId: 'usr-admin-1',
-    creatorRole: 'admin',
-    location: 'National Career Service Portal, New Delhi',
-    city: 'New Delhi',
-    coordinates: { lat: 28.6139, lng: 77.2090 },
-    type: 'internship',
-    category: 'Government',
-    stipend: '₹5,000 / month + ₹6,000 Grant',
-    stipendAmount: 5000,
-    duration: '12 Months',
-    requiredSkills: ['Basic Computer Literacy', 'Communication', 'Community Engagement'],
-    eligibility: 'Indian youth aged 21-24 years not engaged in full-time employment. Minimum 10th/12th/ITI or Graduate pass.',
-    description: 'Prime Minister National Internship Scheme offering 12-month real-world industry experience across India with financial assistance.',
-    responsibilities: [
-      'Learn on-the-job vocational and digital operations',
-      'Participate in skill workshops and mentor interactions'
-    ],
-    perks: ['Government of India Certificate', 'Monthly Stated Stipend', 'National Placement Assistance'],
-    deadline: '2026-12-31',
-    applicantsCount: 540,
-    postedDate: '1 week ago',
-    isVerified: true,
-    verificationStatus: 'approved',
-    verificationEvidence: 'Official Ministry Scheme Verified via National Career Service (NCS) Portal',
-    opportunitySource: 'National Career Service (NCS)',
-    isGovernmentSponsored: true
-  }
-];
+// Live recruiter/college/admin-submitted opportunities only (never hardcoded fake or demo internships)
+const LEGACY_DEMO_JOB_IDS = new Set(['job-1', 'job-2', 'job-3', 'job-4']);
+const jobsDatabase: JobRecord[] = [];
 
 interface ApplicationRecord {
   id: string;
@@ -781,6 +653,26 @@ interface NotificationRecord {
 }
 
 const notificationsDatabase: NotificationRecord[] = [];
+
+interface CertificateRecord {
+  id: string;
+  userId: string;
+  certificateCode: string;
+  studentName: string;
+  courseId: string;
+  courseTitle: string;
+  issueDate: string;
+  scorePercentage: number;
+  qrData: string;
+  instructor: string;
+  source: 'earned' | 'uploaded';
+  issuer?: string;
+  credentialUrl?: string;
+  fileName?: string;
+  createdAt: string;
+}
+
+const certificatesDatabase: CertificateRecord[] = [];
 
 interface VerificationRequestRecord {
   id: string;
@@ -979,7 +871,8 @@ function loadStore() {
       companiesDatabase.splice(0, companiesDatabase.length, ...parsed.companies);
     }
     if (Array.isArray(parsed.jobs)) {
-      jobsDatabase.splice(0, jobsDatabase.length, ...parsed.jobs);
+      const genuineJobs = parsed.jobs.filter((j: any) => j && j.id && !LEGACY_DEMO_JOB_IDS.has(String(j.id)));
+      jobsDatabase.splice(0, jobsDatabase.length, ...genuineJobs);
     }
     if (Array.isArray(parsed.applications)) {
       applicationsDatabase.splice(0, applicationsDatabase.length, ...parsed.applications);
@@ -1001,6 +894,9 @@ function loadStore() {
           sessions.set(s.token, s);
         }
       }
+    }
+    if (Array.isArray(parsed.certificates)) {
+      certificatesDatabase.splice(0, certificatesDatabase.length, ...parsed.certificates);
     }
     if (typeof parsed.certificatesIssuedCount === 'number') {
       certificatesIssuedCount = parsed.certificatesIssuedCount;
@@ -1034,6 +930,7 @@ async function flushStoreAsync() {
       verificationRequests: verificationRequestsDatabase,
       auditLogs: auditLogs.slice(0, 200),
       sessions: Array.from(sessions.values()).filter(s => s.expiresAt > Date.now()),
+      certificates: certificatesDatabase,
       certificatesIssuedCount,
       reportedJobs: typeof reportedJobsStore !== 'undefined' ? reportedJobsStore : [],
     };
@@ -1060,6 +957,41 @@ function saveStore() {
 }
 
 loadStore();
+
+// Build strictly UID- and role-scoped initial session payload in one round-trip
+function buildUserInitialData(user: UserRecord) {
+  const userCerts = certificatesDatabase.filter(c => c.userId === user.id);
+
+  let userApps = applicationsDatabase;
+  if (user.role === 'student' || user.role === 'experienced') {
+    const emailLower = user.email.toLowerCase();
+    userApps = applicationsDatabase.filter(
+      a => a.candidateId === user.id || (!a.candidateId && a.candidateEmail.toLowerCase() === emailLower)
+    );
+  } else if (user.role === 'recruiter') {
+    const ownedJobIds = new Set(jobsDatabase.filter(j => j.creatorId === user.id).map(j => j.id));
+    const companyLower = (user.companyName || '').toLowerCase();
+    userApps = applicationsDatabase.filter(
+      a => ownedJobIds.has(a.jobId) || (companyLower && a.company.toLowerCase() === companyLower)
+    );
+  } else if (user.role === 'college') {
+    const userCollegeLower = (user.college || '').toLowerCase();
+    userApps = userCollegeLower
+      ? applicationsDatabase.filter(a => a.candidateCollege?.toLowerCase().includes(userCollegeLower))
+      : [];
+  }
+
+  const userNotifs = notificationsDatabase.filter(n => {
+    if (n.userId) return n.userId === user.id;
+    return n.targetRole === 'all' || n.targetRole === user.role;
+  });
+
+  return {
+    certificates: userCerts,
+    applications: userApps,
+    notifications: userNotifs,
+  };
+}
 
 // ------------------------------------------
 // AUTH API ENDPOINTS
@@ -1232,6 +1164,8 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
       token,
       user: sanitizeUser(newUser),
       role: newUser.role,
+      isNewUser: true,
+      initialData: buildUserInitialData(newUser),
       message: welcomeMsg
     });
   } catch (error: any) {
@@ -1379,7 +1313,8 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
       success: true,
       token,
       user: sanitizeUser(user),
-      role: user.role
+      role: user.role,
+      initialData: buildUserInitialData(user)
     });
   } catch (error: any) {
     console.error('Login error:', error);
@@ -1566,7 +1501,19 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
   try {
     const authHeader = req.headers.authorization;
     const rawIdToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : req.body.idToken;
-    const { oauthAccessToken, phoneNumber, email, name, role, photoUrl, currentRole, yearsOfExperience } = req.body;
+    const {
+      oauthAccessToken,
+      phoneNumber,
+      email,
+      name,
+      role,
+      photoUrl,
+      currentRole,
+      yearsOfExperience,
+      companyName,
+      cinOrRegistrationNumber,
+      rememberMe = true,
+    } = req.body;
     const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
 
     let verifiedUid = '';
@@ -1646,10 +1593,30 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
     const allowedPublicRole: 'student' | 'recruiter' | 'experienced' =
       role === 'recruiter' || role === 'experienced' ? role : 'student';
 
-    let user = usersDatabase.find(u =>
-      u.id === verifiedUid ||
-      (verifiedEmail && u.email.toLowerCase() === verifiedEmail)
-    );
+    let user = usersDatabase.find(u => u.id === verifiedUid);
+    if (!user && verifiedEmail) {
+      const legacyMatch = usersDatabase.find(u => u.email.toLowerCase() === verifiedEmail);
+      if (legacyMatch) {
+        const oldId = legacyMatch.id;
+        // Migrate legacy local user ID to canonical Firebase UID so all records stay strictly UID-scoped
+        if (oldId !== verifiedUid && oldId.startsWith('usr-')) {
+          legacyMatch.id = verifiedUid;
+          for (const appRec of applicationsDatabase) {
+            if (appRec.candidateId === oldId) appRec.candidateId = verifiedUid;
+          }
+          for (const certRec of certificatesDatabase) {
+            if (certRec.userId === oldId) certRec.userId = verifiedUid;
+          }
+          for (const notifRec of notificationsDatabase) {
+            if (notifRec.userId === oldId) notifRec.userId = verifiedUid;
+          }
+          for (const [, sess] of sessions.entries()) {
+            if (sess.userId === oldId) sess.userId = verifiedUid;
+          }
+        }
+        user = legacyMatch;
+      }
+    }
 
     const isNewUser = !user;
 
@@ -1666,8 +1633,10 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
         email: verifiedEmail || (email ? String(email).trim().toLowerCase() : `${verifiedPhone || verifiedUid}@yuvamitraa.app`),
         phone: verifiedPhone ? `+91 ${verifiedPhone}` : '',
         role: isTokenAdmin ? 'admin' : allowedPublicRole,
-        currentRole: currentRole || undefined,
-        yearsOfExperience: yearsOfExperience || undefined,
+        currentRole: allowedPublicRole === 'experienced' ? (currentRole ? String(currentRole).trim() : undefined) : undefined,
+        yearsOfExperience: allowedPublicRole === 'experienced' ? (yearsOfExperience ? String(yearsOfExperience).trim() : undefined) : undefined,
+        companyName: allowedPublicRole === 'recruiter' ? (companyName ? String(companyName).trim() : generatedName) : undefined,
+        cinOrRegistrationNumber: allowedPublicRole === 'recruiter' ? (cinOrRegistrationNumber ? String(cinOrRegistrationNumber).trim() : '') : undefined,
         college: '',
         course: '',
         education: isTokenAdmin ? 'Platform Administration' : (allowedPublicRole === 'experienced' ? 'Working Professional' : ''),
@@ -1701,11 +1670,12 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
     }
 
     const token = generateSessionToken();
+    const sessionDuration = rememberMe === false ? 24 * 60 * 60 * 1000 : 30 * 24 * 60 * 60 * 1000;
     sessions.set(token, {
       token,
       userId: user.id,
       createdAt: Date.now(),
-      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000
+      expiresAt: Date.now() + sessionDuration
     });
     saveStore();
 
@@ -1715,7 +1685,10 @@ app.post('/api/auth/firebase-login', async (req: Request, res: Response) => {
       token,
       user: sanitizeUser(user),
       role: user.role,
-      isNewUser
+      isNewUser,
+      initialData: isNewUser
+        ? { certificates: [], applications: [], notifications: buildUserInitialData(user).notifications }
+        : buildUserInitialData(user),
     });
   } catch (error: any) {
     console.error('Firebase login error:', error);
@@ -2799,7 +2772,8 @@ app.get('/api/auth/me', async (req: Request, res: Response) => {
     return res.json({
       success: true,
       user: sanitizeUser(user),
-      role: user.role
+      role: user.role,
+      initialData: buildUserInitialData(user)
     });
   } catch (error: any) {
     return res.status(500).json({ error: 'Session verification failed' });
@@ -2847,6 +2821,15 @@ app.delete('/api/user/account', async (req: Request, res: Response) => {
       sessions.delete(token);
     }
   }
+  for (let i = certificatesDatabase.length - 1; i >= 0; i--) {
+    if (certificatesDatabase[i].userId === user.id) certificatesDatabase.splice(i, 1);
+  }
+  for (let i = applicationsDatabase.length - 1; i >= 0; i--) {
+    if (applicationsDatabase[i].candidateId === user.id) applicationsDatabase.splice(i, 1);
+  }
+  for (let i = notificationsDatabase.length - 1; i >= 0; i--) {
+    if (notificationsDatabase[i].userId === user.id) notificationsDatabase.splice(i, 1);
+  }
   saveStore();
   return res.json({ success: true, message: 'Your YuvaMitraa account and profile have been permanently deleted.' });
 });
@@ -2859,10 +2842,13 @@ app.post('/api/user/profile-photo', async (req: Request, res: Response) => {
   const { photoDataUrl } = req.body;
   if (!photoDataUrl) return res.status(400).json({ error: 'Photo data required.' });
 
+  const nowIso = new Date().toISOString();
   user.photoUrl = photoDataUrl;
+  user.profileUpdatedAt = nowIso;
+  user.updatedAt = nowIso;
   recordAuditLog('PROFILE_PHOTO_UPDATED', user.email, 'SUCCESS', 'Profile photo updated');
   saveStore();
-  return res.json({ success: true, photoUrl: user.photoUrl, user: sanitizeUser(user) });
+  return res.json({ success: true, photoUrl: user.photoUrl, profileUpdatedAt: user.profileUpdatedAt, user: sanitizeUser(user) });
 });
 
 // 13. Upload & Save Resume File
@@ -2876,11 +2862,21 @@ app.post('/api/user/resume-upload', async (req: Request, res: Response) => {
     resumeUpdatedAt,
   } = req.body;
 
+  const isClearingResume = resumeText === '' && resumeFileName === '';
+  const nowIso = new Date().toISOString();
+
   if (typeof resumeFileName === 'string') user.resumeFileName = resumeFileName.slice(0, 200);
   if (typeof resumeText === 'string') user.resumeText = resumeText.slice(0, 150000);
-  if (typeof resumeUpdatedAt === 'string') user.resumeUpdatedAt = resumeUpdatedAt.slice(0, 64);
+  if (isClearingResume) {
+    user.resumeUpdatedAt = '';
+  } else if (typeof resumeUpdatedAt === 'string' && resumeUpdatedAt.trim()) {
+    user.resumeUpdatedAt = resumeUpdatedAt.trim().slice(0, 64);
+  } else {
+    user.resumeUpdatedAt = nowIso;
+  }
+  user.updatedAt = nowIso;
 
-  const actionEvent = resumeText === '' && resumeFileName === '' ? 'RESUME_DELETED' : 'RESUME_UPLOADED';
+  const actionEvent = isClearingResume ? 'RESUME_DELETED' : 'RESUME_UPLOADED';
   recordAuditLog(actionEvent, user.email, 'SUCCESS', `Resume updated: ${resumeFileName || 'cleared'}`);
   saveStore();
   return res.json({
@@ -2964,7 +2960,9 @@ const handleUpdateProfile = async (req: Request, res: Response) => {
     savedJobIds,
     badges,
     streakDays,
-    xpPoints
+    xpPoints,
+    markProfileUpdated,
+    profileUpdatedAt
   } = req.body;
 
   if (typeof name === 'string' && name.trim()) user.name = name.trim();
@@ -3021,42 +3019,164 @@ const handleUpdateProfile = async (req: Request, res: Response) => {
   if (typeof streakDays === 'number' && streakDays >= 0) user.streakDays = streakDays;
   if (typeof xpPoints === 'number' && xpPoints >= 0) user.xpPoints = xpPoints;
 
+  const nowIso = new Date().toISOString();
+  user.updatedAt = nowIso;
+  if (markProfileUpdated === true) {
+    user.profileUpdatedAt =
+      typeof profileUpdatedAt === 'string' && profileUpdatedAt.trim()
+        ? profileUpdatedAt.trim().slice(0, 64)
+        : nowIso;
+  }
+
   recordAuditLog('PROFILE_UPDATED', user.email, 'SUCCESS', 'Profile details updated', user.role);
   saveStore();
-  return res.json({ success: true, user: sanitizeUser(user) });
+  return res.json({ success: true, profileUpdatedAt: user.profileUpdatedAt, user: sanitizeUser(user) });
 };
 
 app.post('/api/user/profile', handleUpdateProfile);
 app.put('/api/user/profile', handleUpdateProfile);
 
+// Strictly UID-scoped certificates endpoints
+app.get('/api/certificates', async (req: Request, res: Response) => {
+  const user = await authenticateRequest(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required to view certificates.' });
+
+  const userCerts = certificatesDatabase.filter(c => c.userId === user.id);
+  return res.json({ success: true, certificates: userCerts });
+});
+
 app.post('/api/certificates/issue', async (req: Request, res: Response) => {
   const user = await authenticateRequest(req);
   if (!user) return res.status(401).json({ error: 'Authentication required to issue certificate.' });
-  const { courseId, score } = req.body;
+  const { id, courseId, courseTitle, score, instructor, certificateCode, issueDate, qrData } = req.body;
   if (!courseId) return res.status(400).json({ error: 'Course ID is required.' });
 
-  const certificateId = `YM-${new Date().getFullYear()}-${crypto.randomInt(100000, 999999)}`;
-  certificatesIssuedCount += 1;
+  const cleanCode =
+    typeof certificateCode === 'string' && certificateCode.trim()
+      ? certificateCode.trim().slice(0, 80)
+      : `YM-${new Date().getFullYear()}-${crypto.randomInt(100000, 999999)}`;
+  const cleanId =
+    typeof id === 'string' && id.trim()
+      ? id.trim().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 128)
+      : `cert-${Date.now()}-${crypto.randomInt(100, 999)}`;
+  const numericScore = Math.max(0, Math.min(100, typeof score === 'number' ? score : 100));
+  const nowIso = new Date().toISOString();
+
+  // Deduplicate by (userId, courseId) or certificate id so retries don't duplicate
+  let certRecord = certificatesDatabase.find(
+    c => c.userId === user.id && (c.id === cleanId || (c.source === 'earned' && c.courseId === String(courseId)))
+  );
+  if (!certRecord) {
+    certificatesIssuedCount += 1;
+    certRecord = {
+      id: cleanId,
+      userId: user.id,
+      certificateCode: cleanCode,
+      studentName: user.name,
+      courseId: String(courseId).slice(0, 128),
+      courseTitle: typeof courseTitle === 'string' && courseTitle.trim() ? courseTitle.trim().slice(0, 200) : String(courseId),
+      issueDate: typeof issueDate === 'string' && issueDate.trim() ? issueDate.trim().slice(0, 64) : nowIso.split('T')[0],
+      scorePercentage: numericScore,
+      qrData: typeof qrData === 'string' && qrData.trim() ? qrData.trim().slice(0, 500) : `https://yuvamitraa.gov.in/verify/${cleanCode}`,
+      instructor: typeof instructor === 'string' && instructor.trim() ? instructor.trim().slice(0, 160) : 'YuvaMitraa Skill Foundation',
+      source: 'earned',
+      issuer: 'YuvaMitraa Skill Foundation',
+      createdAt: nowIso,
+    };
+    certificatesDatabase.unshift(certRecord);
+  } else {
+    certRecord.scorePercentage = Math.max(certRecord.scorePercentage, numericScore);
+  }
 
   if (!Array.isArray(user.enrolledCourses)) user.enrolledCourses = [];
   const existing = user.enrolledCourses.find(c => c.courseId === courseId);
   if (existing) {
     existing.passed = true;
-    existing.finalScore = typeof score === 'number' ? score : existing.finalScore;
-    if (!existing.certificateId) existing.certificateId = certificateId;
+    existing.finalScore = numericScore;
+    if (!existing.certificateId) existing.certificateId = certRecord.id;
   } else {
     user.enrolledCourses.push({
       courseId,
       completedModuleIds: [],
       passed: true,
-      finalScore: typeof score === 'number' ? score : 100,
-      certificateId
+      finalScore: numericScore,
+      certificateId: certRecord.id
     });
   }
 
-  recordAuditLog('CERTIFICATE_ISSUED', user.email, 'SUCCESS', `Issued certificate ${certificateId} for ${courseId}`, user.role);
+  recordAuditLog('CERTIFICATE_ISSUED', user.email, 'SUCCESS', `Issued certificate ${certRecord.certificateCode} for ${courseId}`, user.role);
   saveStore();
-  return res.json({ success: true, certificateId, user: sanitizeUser(user) });
+  return res.json({ success: true, certificateId: certRecord.certificateCode, certificate: certRecord, user: sanitizeUser(user) });
+});
+
+app.post('/api/certificates/upload', async (req: Request, res: Response) => {
+  const user = await authenticateRequest(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required to upload certificate.' });
+
+  const { id, courseTitle, issuer, issueDate, certificateCode, credentialUrl, fileName } = req.body;
+  if (!courseTitle || !String(courseTitle).trim()) {
+    return res.status(400).json({ error: 'Certificate title is required.' });
+  }
+  if (!issuer || !String(issuer).trim()) {
+    return res.status(400).json({ error: 'Issuing organization is required.' });
+  }
+
+  const nowIso = new Date().toISOString();
+  const cleanCode =
+    typeof certificateCode === 'string' && certificateCode.trim()
+      ? certificateCode.trim().slice(0, 80)
+      : `EXT-${new Date().getFullYear()}-${crypto.randomInt(100000, 999999)}`;
+  const cleanId =
+    typeof id === 'string' && id.trim()
+      ? id.trim().replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 128)
+      : `cert-up-${Date.now()}-${crypto.randomInt(100, 999)}`;
+
+  const safeUrl =
+    typeof credentialUrl === 'string' && /^https?:\/\//i.test(credentialUrl.trim())
+      ? credentialUrl.trim().slice(0, 500)
+      : '';
+
+  const certRecord: CertificateRecord = {
+    id: cleanId,
+    userId: user.id,
+    certificateCode: cleanCode,
+    studentName: user.name,
+    courseId: 'external-upload',
+    courseTitle: String(courseTitle).trim().slice(0, 200),
+    issueDate: typeof issueDate === 'string' && issueDate.trim() ? issueDate.trim().slice(0, 64) : nowIso.split('T')[0],
+    scorePercentage: 100,
+    qrData: safeUrl || `https://yuvamitraa.gov.in/verify/${cleanCode}`,
+    instructor: String(issuer).trim().slice(0, 160),
+    source: 'uploaded',
+    issuer: String(issuer).trim().slice(0, 160),
+    credentialUrl: safeUrl || undefined,
+    fileName: typeof fileName === 'string' && fileName.trim() ? fileName.trim().slice(0, 200) : undefined,
+    createdAt: nowIso,
+  };
+
+  certificatesDatabase.unshift(certRecord);
+  recordAuditLog('CERTIFICATE_UPLOADED', user.email, 'SUCCESS', `Uploaded certificate "${certRecord.courseTitle}" (${certRecord.certificateCode})`, user.role);
+  saveStore();
+  return res.json({ success: true, certificate: certRecord });
+});
+
+app.delete('/api/certificates/:id', async (req: Request, res: Response) => {
+  const user = await authenticateRequest(req);
+  if (!user) return res.status(401).json({ error: 'Authentication required to delete certificate.' });
+
+  const { id } = req.params;
+  const idx = certificatesDatabase.findIndex(c => c.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ error: 'Certificate not found.' });
+  }
+  const target = certificatesDatabase[idx];
+  if (target.userId !== user.id && user.role !== 'admin') {
+    return res.status(403).json({ error: 'Access denied: You can only delete your own certificates.' });
+  }
+
+  certificatesDatabase.splice(idx, 1);
+  saveStore();
+  return res.json({ success: true });
 });
 
 // 15. Report Suspicious Job or Recruiter
@@ -3317,7 +3437,8 @@ function mapExternalJobToJobRecord(job: JobListing): JobRecord {
 // Fetch Opportunities (Returns approved opportunities, plus live synced external listings)
 app.get('/api/opportunities', async (req: Request, res: Response) => {
   try {
-    await syncEngine.ensureInitialSync().catch(() => {});
+    // Cap initial external sync wait at 1.5s so opportunities never stall user startup on slow networks
+    await syncEngine.ensureInitialSync(1500).catch(() => {});
     const {
       category,
       type,
@@ -3330,10 +3451,21 @@ app.get('/api/opportunities', async (req: Request, res: Response) => {
       education,
       interests,
       preferredLocation,
+      page,
+      limit,
     } = req.query;
 
-    // Base database listings
-    let list = [...jobsDatabase];
+    // Base database listings (automatically exclude expired deadlines)
+    const todayIso = new Date().toISOString().split('T')[0];
+    const isExpiredDeadline = (deadline?: string): boolean => {
+      const d = String(deadline || '').trim();
+      if (!d || /rolling|open|ongoing|active/i.test(d)) return false;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d < todayIso;
+      const parsed = Date.parse(d);
+      return !Number.isNaN(parsed) && parsed < Date.now() - 24 * 60 * 60 * 1000;
+    };
+
+    let list = jobsDatabase.filter(j => !isExpiredDeadline(j.deadline));
 
     // Filter by approval status
     if (showAll !== 'true') {
@@ -3341,9 +3473,9 @@ app.get('/api/opportunities', async (req: Request, res: Response) => {
     }
 
     // Merge active verified listings from SyncEngine (Arbeitnow, Remotive, & any configured adapters)
-    const externalInternships = syncEngine.getInternships().map(mapInternshipToJobRecord);
-    const externalJobs = syncEngine.getJobs().map(mapExternalJobToJobRecord);
-    const combined = [...list, ...externalInternships, ...externalJobs];
+    const externalInternships = syncEngine.getInternships({ includeExpired: false }).map(mapInternshipToJobRecord);
+    const externalJobs = syncEngine.getJobs({ includeExpired: false }).map(mapExternalJobToJobRecord);
+    const combined = [...list, ...externalInternships, ...externalJobs].filter(item => !isExpiredDeadline(item.deadline));
 
     // Deduplicate by ID
     const seenIds = new Set<string>();
@@ -3399,7 +3531,27 @@ app.get('/api/opportunities', async (req: Request, res: Response) => {
         .map(entry => entry.job);
     }
 
-    return res.json({ success: true, jobs: uniqueList });
+    const total = uniqueList.length;
+    const parsedLimit = limit ? Math.max(1, Math.min(200, Number(limit) || 0)) : 0;
+    const parsedPage = page ? Math.max(1, Number(page) || 1) : 1;
+
+    const lastSyncedAt = syncEngine.getLastSyncAt();
+
+    if (parsedLimit > 0) {
+      const start = (parsedPage - 1) * parsedLimit;
+      const pagedJobs = uniqueList.slice(start, start + parsedLimit);
+      return res.json({
+        success: true,
+        jobs: pagedJobs,
+        total,
+        page: parsedPage,
+        limit: parsedLimit,
+        hasMore: start + parsedLimit < total,
+        lastSyncedAt,
+      });
+    }
+
+    return res.json({ success: true, jobs: uniqueList, total, lastSyncedAt });
   } catch (error: any) {
     return res.status(500).json({ error: 'Failed to fetch opportunities' });
   }
@@ -3499,9 +3651,18 @@ app.post('/api/external/recommendations', async (req: Request, res: Response) =>
     const maxItems = Math.min(Math.max(Number(limit) || 8, 1), 20);
 
     const allInternships = syncEngine.getInternships();
-    const externalInternshipJobs = syncEngine
-      .getJobs()
-      .filter(j => j.employmentType === 'Internship' || /intern|trainee|fellow|apprentice|junior|entry/i.test(j.title));
+    const allExternalJobs = syncEngine.getJobs();
+    const strictlyInternJobs = allExternalJobs.filter(
+      j => j.employmentType === 'Internship' || /intern|trainee|fellow|apprentice|junior|entry|graduate/i.test(j.title)
+    );
+    const seenExternalJobIds = new Set(strictlyInternJobs.map(j => j.id));
+    const externalInternshipJobs =
+      allInternships.length + strictlyInternJobs.length >= maxItems
+        ? strictlyInternJobs
+        : [
+            ...strictlyInternJobs,
+            ...allExternalJobs.filter(j => !seenExternalJobIds.has(j.id)).slice(0, 30),
+          ];
 
     const mapExternalMode = (wm?: string): 'Online' | 'Offline' | 'Hybrid' => {
       if (wm === 'Remote') return 'Online';
@@ -3929,7 +4090,11 @@ app.get('/api/applications', async (req: Request, res: Response) => {
     let list = [...applicationsDatabase];
 
     if (user.role === 'student' || user.role === 'experienced') {
-      list = list.filter(a => a.candidateId === user.id || a.candidateEmail.toLowerCase() === user.email.toLowerCase());
+      list = list.filter(
+        a =>
+          a.candidateId === user.id ||
+          (!a.candidateId && a.candidateEmail.toLowerCase() === user.email.toLowerCase())
+      );
     } else if (user.role === 'recruiter') {
       const ownedJobIds = new Set(jobsDatabase.filter(j => j.creatorId === user.id).map(j => j.id));
       const companyLower = (user.companyName || '').toLowerCase();
@@ -4147,6 +4312,81 @@ app.post('/api/applications/:id/status', async (req: Request, res: Response) => 
   }
 });
 
+// Candidate / Owner Interview Schedule & Self-Tracked Progress Update (strictly owner-scoped)
+app.put('/api/applications/:id/schedule', async (req: Request, res: Response) => {
+  try {
+    const user = await authenticateRequest(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required.' });
+
+    const { id } = req.params;
+    const {
+      status,
+      interviewDate,
+      interviewTime,
+      interviewMode,
+      interviewLinkOrVenue,
+      notes
+    } = req.body;
+
+    const application = applicationsDatabase.find(a => a.id === id);
+    if (!application) {
+      return res.status(404).json({ error: 'Application record not found.' });
+    }
+
+    const isCandidateOwner =
+      application.candidateId === user.id ||
+      (!application.candidateId && application.candidateEmail.toLowerCase() === user.email.toLowerCase());
+    if (!isCandidateOwner && user.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied: You can only manage schedules on your own applications.' });
+    }
+
+    const allowedStatuses = new Set(['Applied', 'Under Review', 'Shortlisted', 'Interview', 'Selected', 'Rejected']);
+    if (status && allowedStatuses.has(String(status))) {
+      application.status = status;
+    } else if (interviewDate && (application.status === 'Applied' || application.status === 'Under Review')) {
+      application.status = 'Interview';
+    }
+
+    application.updatedDate = new Date().toISOString().split('T')[0];
+    if (interviewDate !== undefined) application.interviewDate = String(interviewDate).trim().slice(0, 32);
+    if (interviewTime !== undefined) application.interviewTime = String(interviewTime).trim().slice(0, 32);
+    if (interviewMode === 'Online (Google Meet/Zoom)' || interviewMode === 'In-Person / Campus') {
+      application.interviewMode = interviewMode;
+    }
+    if (interviewLinkOrVenue !== undefined) {
+      application.interviewLinkOrVenue = String(interviewLinkOrVenue).trim().slice(0, 300);
+    }
+    if (notes !== undefined) {
+      application.notes = String(notes).trim().slice(0, 1000);
+    }
+
+    if (application.interviewDate) {
+      notificationsDatabase.unshift({
+        id: `notif-${Date.now()}`,
+        userId: user.id,
+        targetRole: user.role === 'admin' ? 'admin' : 'student',
+        title: `Interview Reminder Set: ${application.company}`,
+        message: `Interview for "${application.jobTitle}" scheduled on ${application.interviewDate}${application.interviewTime ? ` at ${application.interviewTime}` : ''}${application.interviewMode ? ` (${application.interviewMode})` : ''}.`,
+        date: 'Just now',
+        type: 'interview',
+        read: false,
+        actionTab: 'applications'
+      });
+    }
+
+    recordAuditLog('INTERVIEW_SCHEDULE_UPDATED', user.email, 'SUCCESS', `Updated schedule for ${application.jobTitle} at ${application.company}`);
+    saveStore();
+
+    return res.json({
+      success: true,
+      application,
+      message: 'Interview schedule and reminder saved.'
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to update interview schedule' });
+  }
+});
+
 // ------------------------------------------
 // 3. COLLEGES & CAMPUS PLACEMENT APIS
 // ------------------------------------------
@@ -4344,17 +4584,19 @@ app.get('/api/notifications', async (req: Request, res: Response) => {
   try {
     const currentUser = await authenticateRequest(req);
     if (!currentUser) {
-      return res.json({ success: true, notifications: [] });
+      return res.status(401).json({ error: 'Authentication required to view notifications.' });
     }
 
     const userRole = currentUser.role;
     const userId = currentUser.id;
 
-    const list = notificationsDatabase.filter(n =>
-      n.targetRole === 'all' ||
-      n.targetRole === userRole ||
-      (userId && n.userId === userId)
-    );
+    // Strictly isolate private user notifications: if n.userId is set, ONLY that owner may see it.
+    const list = notificationsDatabase.filter(n => {
+      if (n.userId) {
+        return n.userId === userId;
+      }
+      return n.targetRole === 'all' || n.targetRole === userRole;
+    });
 
     return res.json({ success: true, notifications: list });
   } catch (error: any) {
@@ -4362,10 +4604,17 @@ app.get('/api/notifications', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/notifications/:id/read', (req: Request, res: Response) => {
+app.post('/api/notifications/:id/read', async (req: Request, res: Response) => {
+  const currentUser = await authenticateRequest(req);
+  if (!currentUser) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
   const { id } = req.params;
   const notif = notificationsDatabase.find(n => n.id === id);
   if (notif) {
+    if (notif.userId && notif.userId !== currentUser.id && currentUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Access denied.' });
+    }
     notif.read = true;
     saveStore();
   }
@@ -4416,9 +4665,12 @@ app.post('/api/user/project', async (req: Request, res: Response) => {
     });
   }
 
+  const nowIso = new Date().toISOString();
+  user.profileUpdatedAt = nowIso;
+  user.updatedAt = nowIso;
   recordAuditLog('PROJECT_SAVED', user.email, 'SUCCESS', `Saved project "${title}"`);
   saveStore();
-  return res.json({ success: true, user: sanitizeUser(user) });
+  return res.json({ success: true, profileUpdatedAt: user.profileUpdatedAt, user: sanitizeUser(user) });
 });
 
 
@@ -4602,7 +4854,7 @@ Analyze the gap and return a valid JSON object matching this schema:
 // 2. Advanced AI Career Mentor Chat (English & Kannada Support, Profile Personalization, Genuine Opportunities)
 app.post('/api/ai/chat', async (req: Request, res: Response) => {
   try {
-    const { message, history, language = 'English', userContext } = req.body;
+    const { message, history, language = 'English', userContext, focusMode = 'guidance' } = req.body;
     if (!process.env.GEMINI_API_KEY) {
       return res.status(503).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
     }
@@ -4619,13 +4871,23 @@ app.post('/api/ai/chat', async (req: Request, res: Response) => {
       ...catalogJobs.map(c => `[Verified Post] ${c.title} at ${c.company} (${c.location}) - Stipend/Salary: ${c.stipend} - Open on YuvaMitraa`)
     ];
 
+    const focusInstructionMap: Record<string, string> = {
+      guidance: 'FOCUS MODE — CAREER GUIDANCE: Give structured, realistic career mentoring grounded in the student profile, next 30-day actions, and verified opportunities.',
+      interview: 'FOCUS MODE — INTERVIEW QUESTION GENERATOR: Generate tailored technical and HR interview questions matched to the student skills & target role, along with concise model STAR answers and common pitfalls to avoid.',
+      communication: 'FOCUS MODE — COMMUNICATION SKILLS COACH: Help the student improve professional English/Kannada communication—self-introductions, elevator pitches, cold recruiter emails, LinkedIn outreach, clarity, grammar, and structured STAR storytelling. Give rewritten examples and speaking tips.',
+      'career-path': 'FOCUS MODE — CAREER PATHS & RELEVANT SKILLS: Compare 2-3 high-growth career paths aligned with the student education and interests, listing exact in-demand skills, starter projects, entry-level roles, and realistic learning milestones.'
+    };
+    const activeFocusDirective = focusInstructionMap[String(focusMode)] || focusInstructionMap.guidance;
+
     const systemInstruction = `You are "YuvaMitraa AI Career Mentor", an advanced, intelligent, compassionate career mentor and educational advisor dedicated to empowering Indian students, graduates, and jobseekers.
+
+${activeFocusDirective}
 
 CORE MISSION & CAPABILITIES:
 1. Personalized Career Guidance: Analyze the student's education, college, branch, skills, projects, and career aspirations. Provide tailored step-by-step roadmaps, skill gap analysis, and industry trends.
-2. Skill Development: Recommend concrete courses, practical projects, and daily learning habits.
-3. Interview Coaching: Explain interview questions, STAR method responses, technical fundamentals, and aptitude preparation.
-4. Resume & ATS Advice: Suggest impactful action verbs, quantifiable achievements, and essential keywords.
+2. Interview Preparation: Generate role-specific technical, behavioral, and HR interview questions with model STAR method answers.
+3. Communication Skills Coaching: Improve spoken and written workplace communication—drafts for cold emails, cover notes, self-introductions, and presentation structure with constructive feedback.
+4. Career Paths & Relevant Skills: Suggest concrete career tracks, high-demand skills to learn next, and practical portfolio projects.
 5. Genuine Opportunity Matching: When asked about internships or jobs, ONLY recommend from the verified catalog provided below. NEVER invent fake companies, fake job titles, or broken links.
 
 LANGUAGE REQUIREMENT:
@@ -4639,7 +4901,7 @@ FORMATTING:
 - Keep explanations inspiring, practical, and actionable.
 
 VERIFIED GENUINE OPPORTUNITIES AVAILABLE:
-${verifiedLiveListings.join('\n')}
+${verifiedLiveListings.join('\n') || 'Refer the student to the live Opportunities tab (Arbeitnow, Remotive, Verified Indian Internships, AICTE & NCS portals).'}
 
 STUDENT PROFILE CONTEXT:
 - Name: ${userContext?.name || 'Student'}
@@ -4648,6 +4910,7 @@ STUDENT PROFILE CONTEXT:
 - Study Year: ${userContext?.studyYear || 'Not specified'}
 - Technical Skills: ${(userContext?.skills || []).join(', ') || 'None specified yet'}
 - Career Interests: ${(userContext?.interests || []).join(', ') || 'None specified yet'}
+- Career Goals: ${userContext?.careerGoals || 'Not specified yet'}
 - Completed Projects: ${(userContext?.projects || []).map((p: any) => p.title || p).join(', ') || 'None listed yet'}
 - Enrolled Courses: ${typeof userContext?.enrolledCoursesCount === 'number' ? userContext.enrolledCoursesCount : (userContext?.enrolledCourses || []).length} course(s) on YuvaMitraa`;
 
@@ -4822,7 +5085,9 @@ app.post('/api/ai/resume-review', async (req: Request, res: Response) => {
 
     const prompt = `
 Analyze this candidate's resume for the target role: "${targetRole}".
-Evaluate ATS (Applicant Tracking System) friendliness, clarity, impact metrics, action verbs, and skill coverage.
+1. Accurately extract the candidate's real Education, Skills, Projects, and Experience directly from the resume text (do not invent items that are not in the resume).
+2. Evaluate ATS (Applicant Tracking System) friendliness, clarity, impact metrics, action verbs, and skill coverage.
+3. Identify crucial missing skills/keywords for the target role and actionable resume improvement suggestions.
 
 Resume content:
 ${resumeText}
@@ -4830,13 +5095,19 @@ ${resumeText}
 Return a valid JSON object matching:
 {
   "atsScore": number (0-100),
-  "overallVerdict": string (e.g. "Good Foundational Resume", "Needs Better Quantifiable Achievements"),
+  "overallVerdict": string (e.g. "Strong Foundational Resume", "Needs Better Quantifiable Achievements"),
   "formattingScore": number (0-100),
   "contentScore": number (0-100),
-  "strengths": string[] (3 points),
-  "improvements": string[] (3-4 high-impact specific fixes),
-  "missingKeywords": string[] (5-8 crucial industry keywords for this role),
-  "rewrittenHeadline": string (a punchy 1-line professional title for their resume)
+  "strengths": string[] (3-4 points),
+  "improvements": string[] (3-5 high-impact specific fixes),
+  "missingKeywords": string[] (5-8 crucial missing skills/keywords for this target role),
+  "rewrittenHeadline": string (a punchy 1-line professional title for their resume),
+  "extractedProfile": {
+    "education": string[] (extracted degrees, institutions, years, CGPA/grades found in the resume),
+    "skills": string[] (extracted technical and soft skills found in the resume),
+    "projects": [{ "title": string, "summary": string, "technologies": string[] }],
+    "experience": string[] (extracted internships, work roles, leadership positions or volunteer experience found in the resume)
+  }
 }
 `;
 
@@ -4857,7 +5128,7 @@ Return a valid JSON object matching:
     return res.json(result);
   } catch (error: any) {
     console.error('Resume review error:', error);
-    return sendAiError(res, error, 'Failed to analyze resume with Gemini AI.');
+    return sendAiError(res, error, 'Failed to analyze resume.');
   }
 });
 

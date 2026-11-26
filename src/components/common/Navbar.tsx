@@ -63,7 +63,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs transition-colors">
+    <header className="sticky top-0 z-40 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 shadow-xs transition-colors">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
         
         {/* Brand Logo & Tagline */}
@@ -78,14 +78,14 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
           />
           <div>
             <div className="flex items-center gap-1 sm:gap-1.5">
-              <span className="text-base sm:text-xl font-bold tracking-tight text-slate-900">
+              <span className="text-base sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
                 Yuva<span className="text-[#FF7A00]">Mitraa</span>
               </span>
-              <span className="text-[9px] sm:text-[10px] font-semibold uppercase tracking-wider bg-[#E6F4FF] text-[#0284C7] px-1 sm:px-1.5 py-0.5 rounded-sm">
+              <span className="text-[9px] sm:text-[10px] font-semibold uppercase tracking-wider bg-[#E6F4FF] dark:bg-sky-950/70 text-[#0284C7] dark:text-sky-300 px-1 sm:px-1.5 py-0.5 rounded-sm">
                 IN
               </span>
             </div>
-            <p className="text-[11px] font-medium text-slate-500 -mt-0.5 hidden sm:block">
+            <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 -mt-0.5 hidden sm:block">
               Learn • Skill • Work • Grow
             </p>
           </div>
@@ -102,7 +102,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('searchPlaceholder')}
-            className="w-full pl-9.5 pr-4 py-2 text-xs bg-slate-100 hover:bg-slate-200/70 focus:bg-white text-slate-900 border border-transparent focus:border-[#FF7A00] rounded-xl outline-hidden transition-all placeholder:text-slate-400"
+            className="w-full pl-9.5 pr-4 py-2 text-xs bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/70 dark:hover:bg-slate-700/80 focus:bg-white dark:focus:bg-slate-800 text-slate-900 dark:text-white border border-transparent focus:border-[#FF7A00] rounded-xl outline-hidden transition-all placeholder:text-slate-400"
           />
         </form>
 
@@ -268,8 +268,8 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
             onClick={toggleViewportMode}
             className={`hidden sm:flex p-2 rounded-xl transition-all cursor-pointer items-center gap-1.5 text-xs font-semibold ${
               viewportMode === 'mobile'
-                ? 'bg-orange-100 text-[#FF7A00] font-bold'
-                : 'text-slate-600 hover:bg-slate-100'
+                ? 'bg-orange-100 dark:bg-orange-950/70 text-[#FF7A00] font-bold'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
             title={viewportMode === 'mobile' ? 'Switch to Full Desktop View' : 'Fix Screen to Mobile Screen Frame'}
           >
@@ -299,7 +299,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
           <div className="relative">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
-              className="flex items-center gap-2 p-1 pl-2 pr-1.5 rounded-full hover:bg-slate-100 transition-colors border border-slate-200"
+              className="flex items-center gap-2 p-1 pl-2 pr-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border border-slate-200 dark:border-slate-700"
             >
               {user.photoUrl ? (
                 <img
@@ -313,7 +313,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                 </div>
               )}
               <div className="flex flex-col text-left hidden sm:block">
-                <span className="text-xs font-bold text-slate-700 max-w-[80px] truncate leading-tight block">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-200 max-w-[80px] truncate leading-tight block">
                   {(user?.name || 'Member').split(' ')[0]}
                 </span>
                 <span className="text-[9px] font-extrabold uppercase text-[#FF7A00] tracking-wider block">
@@ -324,29 +324,29 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
             </button>
 
             {showUserMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95">
-                <div className="px-3.5 py-2.5 border-b border-slate-100">
+              <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-800 py-1.5 z-50 animate-in fade-in zoom-in-95">
+                <div className="px-3.5 py-2.5 border-b border-slate-100 dark:border-slate-800">
                   <div className="flex items-center justify-between">
-                    <p className="text-xs font-bold text-slate-900 truncate">{user.name}</p>
+                    <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{user.name}</p>
                     <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded-sm uppercase tracking-wider ${
                       user.role === 'admin'
-                        ? 'bg-slate-900 text-white'
+                        ? 'bg-slate-900 dark:bg-slate-700 text-white'
                         : user.role === 'recruiter'
-                        ? 'bg-purple-100 text-purple-700'
-                        : 'bg-orange-100 text-[#FF7A00]'
+                        ? 'bg-purple-100 dark:bg-purple-950/70 text-purple-700 dark:text-purple-300'
+                        : 'bg-orange-100 dark:bg-orange-950/70 text-[#FF7A00]'
                     }`}>
                       {user.role}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 truncate mt-0.5">{user.email}</p>
-                  <div className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-slate-600">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">{user.email}</p>
+                  <div className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-slate-600 dark:text-slate-300">
                     {user.phone && (
                       <>
                         <span>+91 {user.phone}</span>
                         <span>•</span>
                       </>
                     )}
-                    <span className="text-[#FF7A00] font-bold">⭐ {user.xpPoints ?? 0} XP</span>
+                    <span className="text-[#FF7A00] font-bold">★ {user.xpPoints ?? 0} XP</span>
                   </div>
                 </div>
 
@@ -356,7 +356,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                       setActiveTab('admin');
                       setShowUserMenu(false);
                     }}
-                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-slate-800 hover:bg-slate-50 flex items-center gap-2"
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2"
                   >
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Admin Dashboard</span>
@@ -369,7 +369,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                       setActiveTab('college');
                       setShowUserMenu(false);
                     }}
-                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-orange-700 hover:bg-orange-50 flex items-center gap-2"
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-orange-700 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-slate-800 flex items-center gap-2"
                   >
                     <Building2 className="w-3.5 h-3.5 text-orange-600" />
                     <span>College Placement Portal</span>
@@ -382,7 +382,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                       setActiveTab('recruiter');
                       setShowUserMenu(false);
                     }}
-                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-purple-700 hover:bg-purple-50 flex items-center gap-2"
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-purple-700 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-slate-800 flex items-center gap-2"
                   >
                     <Building2 className="w-3.5 h-3.5 text-purple-600" />
                     <span>Recruiter Dashboard</span>
@@ -395,7 +395,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                       setActiveTab('experienced');
                       setShowUserMenu(false);
                     }}
-                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-amber-700 hover:bg-amber-50 flex items-center gap-2"
+                    className="w-full px-3.5 py-2 text-left text-xs font-bold text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-slate-800 flex items-center gap-2"
                   >
                     <Briefcase className="w-3.5 h-3.5 text-[#FF7A00]" />
                     <span>Experienced Career Hub</span>
@@ -407,7 +407,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                     setActiveTab('profile');
                     setShowUserMenu(false);
                   }}
-                  className="w-full px-3.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                  className="w-full px-3.5 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2"
                 >
                   <User className="w-3.5 h-3.5 text-slate-400" />
                   <span>{t('profile')}</span>
@@ -418,20 +418,20 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                     onOpenSettings();
                     setShowUserMenu(false);
                   }}
-                  className="w-full px-3.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                  className="w-full px-3.5 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2"
                 >
                   <Settings className="w-3.5 h-3.5 text-slate-400" />
                   <span>Settings & Accessibility</span>
                 </button>
 
-                <div className="my-1 border-t border-slate-100" />
+                <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
 
                 <button
                   onClick={() => {
                     logout();
                     setShowUserMenu(false);
                   }}
-                  className="w-full px-3.5 py-2 text-left text-xs text-[#FF7A00] font-bold hover:bg-orange-50 flex items-center gap-2 cursor-pointer"
+                  className="w-full px-3.5 py-2 text-left text-xs text-[#FF7A00] font-bold hover:bg-orange-50 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer"
                 >
                   <KeyRound className="w-3.5 h-3.5" />
                   <span>Switch Account / Sign In</span>
@@ -442,7 +442,7 @@ export const Navbar: React.FC<{ onOpenSettings: () => void }> = ({ onOpenSetting
                     logout();
                     setShowUserMenu(false);
                   }}
-                  className="w-full px-3.5 py-2 text-left text-xs text-red-600 font-semibold hover:bg-red-50 flex items-center gap-2 cursor-pointer"
+                  className="w-full px-3.5 py-2 text-left text-xs text-red-600 dark:text-red-400 font-semibold hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Log Out</span>

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { 
   UserProfile, 
   Job, 
@@ -12,31 +12,44 @@ import {
   InternshipListing
 } from '../types';
 import { 
-  SAMPLE_JOBS, 
   SAMPLE_COURSES, 
   UI_TRANSLATIONS 
 } from '../data/mockData';
 import { 
   fetchCurrentUserApi, 
+  firebaseLoginApi,
   logoutApi,
+  updateProfileApi,
   fetchOpportunitiesApi,
   fetchApplicationsApi,
   applyOpportunityApi,
   updateApplicationStatusApi,
+  updateApplicationScheduleApi,
   postOpportunityApi,
   updateOpportunityApi,
   deleteOpportunityApi,
   fetchNotificationsApi,
   markNotificationReadApi,
+  fetchCertificatesApi,
   issueCertificateApi,
+  uploadCertificateApi,
+  deleteCertificateApi,
   fetchPersonalizedRecommendationsApi
 } from '../services/api';
 import {
   auth,
   onAuthStateChanged,
+  waitForFirebaseAuthReady,
+  clearFirestoreClientCache,
   getFirebaseCustomClaims,
   getSavedResumeFromFirestore,
   getUserProfileFromFirestore,
+  syncUserProfileToFirestore,
+  getUserCertificatesFromFirestore,
+  saveUserCertificateToFirestore,
+  deleteUserCertificateFromFirestore,
+  getUserApplicationsFromFirestore,
+  saveUserApplicationToFirestore,
   saveStudentRecommendationsToFirestore,
   getStudentRecommendationsFromFirestore,
   getVerifiedInternshipsFromFirestore,
@@ -48,6 +61,7 @@ import {
   computeProfileSignature,
   suggestResourcesForMissingSkills
 } from '../services/matchingEngine';
+import { normalizeTimestampToIso } from '../utils/relativeTime';
 
 export interface RecommendationSourceStatus {
   externalApiCount: number;
@@ -55,6 +69,16 @@ export interface RecommendationSourceStatus {
   platformVerifiedCount: number;
   externalUnavailable: boolean;
   totalVerifiedCount: number;
+}
+
+export interface LoginSessionOptions {
+  isNewUser?: boolean;
+  initialData?: {
+    certificates?: Certificate[];
+    applications?: Application[];
+    notifications?: NotificationItem[];
+  };
+  preloadedProfile?: any;
 }
 
 interface AppContextType {
@@ -79,10 +103,27 @@ interface AppContextType {
   applications: Application[];
   applyForJob: (job: Job, coverLetter: string, eligibilityScore?: number) => Promise<boolean>;
   updateApplicationStatus: (appId: string, status: Application['status'], details?: any) => Promise<void>;
+  updateApplicationSchedule: (appId: string, details: {
+    status?: Application['status'];
+    interviewDate?: string;
+    interviewTime?: string;
+    interviewMode?: 'Online (Google Meet/Zoom)' | 'In-Person / Campus';
+    interviewLinkOrVenue?: string;
+    notes?: string;
+  }) => Promise<void>;
   savedJobIds: string[];
   toggleSaveJob: (jobId: string) => void;
   certificates: Certificate[];
   issueCertificate: (course: Course, scorePercentage: number) => Certificate;
+  uploadCertificate: (payload: {
+    courseTitle: string;
+    issuer: string;
+    issueDate: string;
+    certificateCode?: string;
+    credentialUrl?: string;
+    fileName?: string;
+  }) => Promise<Certificate>;
+  deleteCertificate: (certificateId: string) => Promise<void>;
   notifications: NotificationItem[];
   markNotificationRead: (id: string) => void;
   darkMode: boolean;
@@ -107,12 +148,14 @@ interface AppContextType {
   toggleViewportMode: () => void;
   // Auth state & actions
   isAuthenticated: boolean;
+  isHydratingUserSession: boolean;
   authToken: string | null;
-  login: (token: string, user: UserProfile) => void;
+  login: (token: string, user: UserProfile, options?: LoginSessionOptions) => void;
   logout: () => void;
   refreshOpportunities: () => Promise<void>;
   isLoadingOpportunities: boolean;
   opportunitiesError: string | null;
+  opportunitiesLastSyncedAt: string | null;
   firestoreInternshipsCount: number;
   refreshApplications: () => Promise<void>;
   // AI Personalized Internship Matching State
@@ -140,9 +183,54 @@ function computeHaversineDistance(lat1: number, lon1: number, lat2: number, lon2
   return Math.round(R * c * 10) / 10;
 }
 
-const INITIAL_APPLICATIONS: Application[] = [];
+// Legacy/unscoped user-private storage keys that must NEVER persist across accounts
+const USER_PRIVATE_STORAGE_KEYS = [
+  'ym_user',
+  'ym_applications',
+  'ym_certificates',
+  'ym_remembered_account',
+  'ym_daily_goal',
+  'ym_roadmap_completed',
+  'ym_bookmarked_courses',
+  'ym_solved_problems',
+  'ym_chat_sessions_guest',
+];
 
-const INITIAL_CERTIFICATES: Certificate[] = [];
+const USER_SCOPED_CACHE_PREFIXES = [
+  'ym_daily_goal_',
+  'ym_roadmap_completed_',
+  'ym_bookmarked_courses_',
+  'ym_solved_problems_',
+  'ym_chat_sessions_',
+];
+
+function purgeUserPrivateBrowserCaches(includeAuthToken: boolean) {
+  try {
+    for (const key of USER_PRIVATE_STORAGE_KEYS) {
+      localStorage.removeItem(key);
+    }
+    if (includeAuthToken) {
+      localStorage.removeItem('ym_auth_token');
+      // On full logout, remove all user-specific cached keys from localStorage
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && USER_SCOPED_CACHE_PREFIXES.some((prefix) => k.startsWith(prefix))) {
+          keysToRemove.push(k);
+        }
+      }
+      for (const k of keysToRemove) {
+        localStorage.removeItem(k);
+      }
+    }
+    // Clear any cached sessionStorage entries for this tab
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.clear();
+    }
+  } catch {
+    // ignore storage errors in restricted contexts
+  }
+}
 
 export const EMPTY_USER: UserProfile = {
   id: '',
@@ -173,11 +261,14 @@ export const EMPTY_USER: UserProfile = {
   resumeText: '',
   resumeFileName: '',
   resumeUpdatedAt: '',
+  profileUpdatedAt: '',
+  updatedAt: '',
   streakDays: 0,
   xpPoints: 0,
   badges: [],
   savedJobIds: [],
   enrolledCourses: [],
+  projects: [],
 };
 
 export function normalizeUserProfile(rawUser: any): UserProfile {
@@ -191,6 +282,7 @@ export function normalizeUserProfile(rawUser: any): UserProfile {
   return {
     ...EMPTY_USER,
     ...rawUser,
+    id: String(rawUser.id || rawUser.uid || ''),
     course: rawUser.course || '',
     branch: rawUser.branch || '',
     studyYear: rawUser.studyYear || '',
@@ -205,13 +297,117 @@ export function normalizeUserProfile(rawUser: any): UserProfile {
     enrolledCourses: Array.isArray(rawUser.enrolledCourses) ? rawUser.enrolledCourses : [],
     savedJobIds: Array.isArray(rawUser.savedJobIds) ? rawUser.savedJobIds : [],
     badges: Array.isArray(rawUser.badges) ? rawUser.badges : [],
+    projects: Array.isArray(rawUser.projects) ? rawUser.projects : [],
     streakDays: typeof rawUser.streakDays === 'number' ? rawUser.streakDays : 0,
     xpPoints: typeof rawUser.xpPoints === 'number' ? rawUser.xpPoints : 0,
     location: rawUser.location || 'India',
     resumeFileName: rawUser.resumeFileName || '',
     resumeText: rawUser.resumeText || '',
-    resumeUpdatedAt: rawUser.resumeUpdatedAt || '',
+    resumeUpdatedAt: normalizeTimestampToIso(rawUser.resumeUpdatedAt),
+    profileUpdatedAt: normalizeTimestampToIso(rawUser.profileUpdatedAt),
+    updatedAt: normalizeTimestampToIso(rawUser.updatedAt),
   };
+}
+
+function mergeProfileWithFirestore(
+  baseUser: UserProfile,
+  fsProfile: any | null,
+  savedResume: { fileName: string; text: string; updatedAt: string } | null
+): UserProfile {
+  const mergedFromFs: Partial<UserProfile> = {};
+  if (fsProfile) {
+    const scalarKeys: Array<keyof UserProfile> = [
+      'name', 'phone', 'education', 'institution', 'college', 'course',
+      'branch', 'studyYear', 'rollNumber', 'cgpa', 'graduationYear',
+      'location', 'preferredLocation', 'preferredDomain', 'careerGoals',
+      'workModePreference', 'githubUrl', 'linkedinUrl', 'portfolioUrl', 'photoUrl',
+      'companyName', 'designation', 'industry', 'companyWebsite', 'cinOrRegistrationNumber',
+      'currentRole', 'yearsOfExperience'
+    ];
+    for (const k of scalarKeys) {
+      if (fsProfile[k] !== undefined && fsProfile[k] !== null && fsProfile[k] !== '') {
+        (mergedFromFs as any)[k] = fsProfile[k];
+      }
+    }
+    if (typeof fsProfile.age === 'number') mergedFromFs.age = fsProfile.age;
+    if (typeof fsProfile.streakDays === 'number') {
+      mergedFromFs.streakDays = Math.max(baseUser.streakDays || 0, fsProfile.streakDays);
+    }
+    if (typeof fsProfile.xpPoints === 'number') {
+      mergedFromFs.xpPoints = Math.max(baseUser.xpPoints || 0, fsProfile.xpPoints);
+    }
+    const arrKeys: Array<keyof UserProfile> = [
+      'skills', 'nonTechnicalSkills', 'interests', 'preferredRoles', 'savedJobIds', 'badges'
+    ];
+    for (const k of arrKeys) {
+      if (Array.isArray(fsProfile[k]) && fsProfile[k].length > 0) {
+        (mergedFromFs as any)[k] = fsProfile[k];
+      }
+    }
+    if (Array.isArray(fsProfile.enrolledCourses) && fsProfile.enrolledCourses.length > 0) {
+      mergedFromFs.enrolledCourses = fsProfile.enrolledCourses;
+    }
+    if (Array.isArray(fsProfile.projects) && fsProfile.projects.length > 0) {
+      mergedFromFs.projects = fsProfile.projects;
+    }
+
+    const fsProfileUpdatedAt = normalizeTimestampToIso(fsProfile.profileUpdatedAt);
+    const fsUpdatedAt = normalizeTimestampToIso(fsProfile.updatedAt);
+    const fsResumeUpdatedAt = normalizeTimestampToIso(fsProfile.resumeUpdatedAt);
+
+    if (fsUpdatedAt) mergedFromFs.updatedAt = fsUpdatedAt;
+    if (fsProfileUpdatedAt) {
+      mergedFromFs.profileUpdatedAt = fsProfileUpdatedAt;
+    } else if (!baseUser.profileUpdatedAt && fsUpdatedAt) {
+      mergedFromFs.profileUpdatedAt = fsUpdatedAt;
+    }
+    if (fsResumeUpdatedAt) {
+      mergedFromFs.resumeUpdatedAt = fsResumeUpdatedAt;
+    }
+  }
+
+  return normalizeUserProfile({
+    ...EMPTY_USER,
+    ...baseUser,
+    ...mergedFromFs,
+    ...(savedResume ? {
+      resumeFileName: savedResume.fileName,
+      resumeText: savedResume.text,
+      resumeUpdatedAt: normalizeTimestampToIso(savedResume.updatedAt) || mergedFromFs.resumeUpdatedAt || baseUser.resumeUpdatedAt || '',
+    } : {}),
+  });
+}
+
+function deduplicateCertificates(lists: Certificate[][], expectedUid: string): Certificate[] {
+  const seen = new Set<string>();
+  const merged: Certificate[] = [];
+  for (const list of lists) {
+    for (const cert of list) {
+      if (!cert || !cert.id) continue;
+      // Enforce strict UID match whenever userId is recorded on the certificate
+      if (cert.userId && expectedUid && cert.userId !== expectedUid) continue;
+      const dedupeKey = `${cert.id}::${cert.certificateCode || ''}`;
+      if (seen.has(cert.id) || seen.has(dedupeKey)) continue;
+      seen.add(cert.id);
+      seen.add(dedupeKey);
+      merged.push({ ...cert, userId: cert.userId || expectedUid });
+    }
+  }
+  return merged;
+}
+
+function deduplicateApplications(lists: Application[][]): Application[] {
+  const seen = new Set<string>();
+  const merged: Application[] = [];
+  for (const list of lists) {
+    for (const app of list) {
+      if (!app || !app.id) continue;
+      if (seen.has(app.id)) continue;
+      seen.add(app.id);
+      merged.push(app);
+    }
+  }
+  return merged;
 }
 
 function mapFirestoreInternshipToJob(item: InternshipListing): Job {
@@ -260,15 +456,17 @@ function mapFirestoreInternshipToJob(item: InternshipListing): Job {
   };
 }
 
+function getDefaultTabForRole(role: UserRole): string {
+  if (role === 'admin') return 'admin';
+  if (role === 'recruiter') return 'recruiter';
+  if (role === 'experienced') return 'experienced';
+  if (role === 'college') return 'college';
+  return 'home';
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<UserProfile>(() => {
-    try {
-      const saved = localStorage.getItem('ym_user');
-      return saved ? normalizeUserProfile(JSON.parse(saved)) : EMPTY_USER;
-    } catch {
-      return EMPTY_USER;
-    }
-  });
+  // Always start with clean empty user state in memory; never hydrate another user's localStorage cache
+  const [user, setUser] = useState<UserProfile>(EMPTY_USER);
 
   const [language, setLanguageState] = useState<Language>(() => {
     return (localStorage.getItem('ym_language') as Language) || 'English';
@@ -287,33 +485,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setOpenApplyModal(true);
     setSelectedJobForDetail(job);
   };
-  
+
+  // Public opportunities list (live verified listings only — never fake or hardcoded demo internships)
   const [jobs, setJobs] = useState<Job[]>(() => {
     try {
       const saved = localStorage.getItem('ym_jobs');
-      return saved ? JSON.parse(saved) : SAMPLE_JOBS;
+      if (!saved) return [];
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+      const legacyDemoIds = new Set(['job-1', 'job-2', 'job-3', 'job-4', 'job-5']);
+      return parsed.filter((j: any) => j && j.id && !legacyDemoIds.has(String(j.id)));
     } catch {
-      return SAMPLE_JOBS;
+      return [];
     }
   });
 
-  const [applications, setApplications] = useState<Application[]>(() => {
-    try {
-      const saved = localStorage.getItem('ym_applications');
-      return saved ? JSON.parse(saved) : INITIAL_APPLICATIONS;
-    } catch {
-      return INITIAL_APPLICATIONS;
-    }
-  });
-
-  const [certificates, setCertificates] = useState<Certificate[]>(() => {
-    try {
-      const saved = localStorage.getItem('ym_certificates');
-      return saved ? JSON.parse(saved) : INITIAL_CERTIFICATES;
-    } catch {
-      return INITIAL_CERTIFICATES;
-    }
-  });
+  // Strictly in-memory per-UID user state — never initialized from unscoped localStorage
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [certificates, setCertificates] = useState<Certificate[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     return localStorage.getItem('ym_dark_mode') === 'true';
@@ -348,28 +538,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const [authToken, setAuthToken] = useState<string | null>(() => {
-    return localStorage.getItem('ym_auth_token') || null;
+    const saved = localStorage.getItem('ym_auth_token');
+    return saved && saved !== 'token-demo-session' ? saved : null;
+  });
+
+  // Show loading screen while restoring or switching user sessions until UID-scoped data arrives
+  const [isHydratingUserSession, setIsHydratingUserSession] = useState<boolean>(() => {
+    const saved = localStorage.getItem('ym_auth_token');
+    return Boolean(saved && saved !== 'token-demo-session');
   });
 
   const [hasVerifiedAdminClaim, setHasVerifiedAdminClaim] = useState<boolean>(false);
 
-  const isAuthenticated = Boolean(authToken && user);
+  const isAuthenticated = Boolean(authToken && user?.id);
   const isRecruiter = user.role === 'recruiter';
   const isExperienced = user.role === 'experienced';
   const isCollege = user.role === 'college';
   const isAdmin = user.role === 'admin' && hasVerifiedAdminClaim;
   const role = user.role;
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-
   // Opportunities & AI Personalized Internship Matching state
   const [isLoadingOpportunities, setIsLoadingOpportunities] = useState<boolean>(false);
   const [opportunitiesError, setOpportunitiesError] = useState<string | null>(null);
+  const [opportunitiesLastSyncedAt, setOpportunitiesLastSyncedAt] = useState<string | null>(null);
   const [firestoreInternshipsCount, setFirestoreInternshipsCount] = useState<number>(0);
   const [recommendationsBundle, setRecommendationsBundle] = useState<StudentRecommendationBundle | null>(null);
   const [isLoadingRecommendations, setIsLoadingRecommendations] = useState<boolean>(false);
   const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
   const [recommendationSourceStatus, setRecommendationSourceStatus] = useState<RecommendationSourceStatus | null>(null);
+
+  // Monotonic session generation counter to cancel/ignore stale async responses across login/logout
+  const sessionGenRef = useRef<number>(0);
+  const activeUidRef = useRef<string>('');
+  const pendingProfileSyncRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recommendationsInFlightSigRef = useRef<string | null>(null);
+
+  // Cleanly purge any legacy unscoped keys on first mount so stale caches from prior builds cannot leak
+  useEffect(() => {
+    purgeUserPrivateBrowserCaches(false);
+  }, []);
+
+  const resetUserSessionState = () => {
+    if (pendingProfileSyncRef.current) {
+      clearTimeout(pendingProfileSyncRef.current);
+      pendingProfileSyncRef.current = null;
+    }
+    recommendationsInFlightSigRef.current = null;
+    activeUidRef.current = '';
+    setUser(EMPTY_USER);
+    setApplications([]);
+    setCertificates([]);
+    setNotifications([]);
+    setRecommendationsBundle(null);
+    setRecommendationsError(null);
+    setRecommendationSourceStatus(null);
+    setSelectedJobForDetail(null);
+    setSelectedCourseForPlayer(null);
+    setOpenApplyModal(false);
+    setHasVerifiedAdminClaim(false);
+  };
 
   // Load live opportunities from backend + verified Indian internships from Firestore
   const refreshOpportunities = async () => {
@@ -389,6 +616,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ? apiResult.value.opportunities
               : [])
           : [];
+      if (apiResult.status === 'fulfilled' && apiResult.value?.lastSyncedAt) {
+        setOpportunitiesLastSyncedAt(String(apiResult.value.lastSyncedAt));
+      }
 
       const fsListings: InternshipListing[] =
         firestoreResult.status === 'fulfilled' && Array.isArray(firestoreResult.value)
@@ -429,64 +659,187 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Load live applications from backend (requires valid authToken)
+  // Load live applications for the currently authenticated user (server enforces UID ownership)
   const refreshApplications = async () => {
-    if (!authToken || !user?.email) return;
+    if (!authToken || !user?.id) return;
+    const gen = sessionGenRef.current;
+    const uid = auth.currentUser?.uid || user.id;
     try {
-      const data = await fetchApplicationsApi(
-        user.role === 'student' || user.role === 'experienced' ? { candidateEmail: user.email } : undefined,
-        authToken
-      );
-      if (Array.isArray(data?.applications)) {
-        setApplications(data.applications);
-      }
+      const [apiRes, fsApps] = await Promise.all([
+        fetchApplicationsApi(undefined, authToken).catch(() => ({ applications: [] })),
+        auth.currentUser?.uid === uid && (user.role === 'student' || user.role === 'experienced')
+          ? getUserApplicationsFromFirestore(uid).catch(() => [] as Application[])
+          : Promise.resolve([] as Application[]),
+      ]);
+      if (sessionGenRef.current !== gen) return;
+      const backendApps: Application[] = Array.isArray(apiRes?.applications) ? apiRes.applications : [];
+      setApplications(deduplicateApplications([backendApps, fsApps]));
     } catch (err) {
       console.warn('Backend applications fetch skipped:', err);
     }
   };
 
-  // Load live notifications (only when authenticated)
-  const refreshNotifications = async () => {
-    if (!authToken) return;
+  const loadedOpportunitiesScopeRef = useRef<string | null>(null);
+
+  // Hydrate remaining UID-scoped data asynchronously in the background without blocking dashboard render
+  const hydrateUserSession = async (
+    token: string,
+    rawUser: UserProfile,
+    gen: number,
+    options?: LoginSessionOptions
+  ) => {
+    const baseUser = normalizeUserProfile(rawUser);
+    const fbUser = auth.currentUser;
+    const isMatchingFirebaseUser = Boolean(
+      fbUser && (fbUser.uid === baseUser.id || (fbUser.email && baseUser.email && fbUser.email.toLowerCase() === baseUser.email.toLowerCase()))
+    );
+    const activeUid = (isMatchingFirebaseUser && fbUser ? fbUser.uid : baseUser.id) || '';
+    activeUidRef.current = activeUid;
+
+    const hasBundledInitialData = Boolean(options?.initialData);
+    const hasPreloadedProfile = options?.preloadedProfile !== undefined;
+
     try {
-      const data = await fetchNotificationsApi(authToken, user.role);
-      if (Array.isArray(data?.notifications)) {
-        setNotifications(data.notifications);
+      // Brand-new accounts start clean — skip empty Firestore subcollection scans & duplicate API calls
+      if (options?.isNewUser) {
+        if (sessionGenRef.current === gen) {
+          setIsHydratingUserSession(false);
+        }
+        return;
       }
-    } catch {
-      // ignore non-critical notification polling failures
+
+      const [
+        fsProfile,
+        savedResume,
+        fsCertificates,
+        fsApplications,
+        cachedRecs,
+        backendCertsRes,
+        backendAppsRes,
+        backendNotifsRes,
+        adminClaims,
+      ] = await Promise.all([
+        !hasPreloadedProfile && isMatchingFirebaseUser && fbUser
+          ? getUserProfileFromFirestore(fbUser.uid).catch(() => null)
+          : Promise.resolve(options?.preloadedProfile ?? null),
+        isMatchingFirebaseUser && fbUser
+          ? getSavedResumeFromFirestore(fbUser.uid).catch(() => null)
+          : Promise.resolve(null),
+        isMatchingFirebaseUser && fbUser
+          ? getUserCertificatesFromFirestore(fbUser.uid).catch(() => [] as Certificate[])
+          : Promise.resolve([] as Certificate[]),
+        isMatchingFirebaseUser && fbUser && (baseUser.role === 'student' || baseUser.role === 'experienced')
+          ? getUserApplicationsFromFirestore(fbUser.uid).catch(() => [] as Application[])
+          : Promise.resolve([] as Application[]),
+        isMatchingFirebaseUser && fbUser && (baseUser.role === 'student' || baseUser.role === 'experienced')
+          ? getStudentRecommendationsFromFirestore(fbUser.uid).catch(() => null)
+          : Promise.resolve(null),
+        !hasBundledInitialData
+          ? fetchCertificatesApi(token).catch(() => ({ certificates: [] }))
+          : Promise.resolve({ certificates: options?.initialData?.certificates || [] }),
+        !hasBundledInitialData
+          ? fetchApplicationsApi(undefined, token).catch(() => ({ applications: [] }))
+          : Promise.resolve({ applications: options?.initialData?.applications || [] }),
+        !hasBundledInitialData
+          ? fetchNotificationsApi(token, baseUser.role).catch(() => ({ notifications: [] }))
+          : Promise.resolve({ notifications: options?.initialData?.notifications || [] }),
+        isMatchingFirebaseUser && fbUser && fbUser.emailVerified && baseUser.role === 'admin'
+          ? getFirebaseCustomClaims(false).catch(() => ({}))
+          : Promise.resolve({}),
+      ]);
+
+      // Abort immediately if the user logged out or switched accounts while requests were in flight
+      if (sessionGenRef.current !== gen || activeUidRef.current !== activeUid) return;
+
+      const hydratedUser = mergeProfileWithFirestore(
+        { ...baseUser, id: activeUid || baseUser.id },
+        fsProfile,
+        savedResume
+      );
+
+      const backendCerts: Certificate[] = Array.isArray(backendCertsRes?.certificates)
+        ? backendCertsRes.certificates
+        : [];
+      const mergedCerts = deduplicateCertificates([fsCertificates, backendCerts], activeUid);
+
+      const backendApps: Application[] = Array.isArray(backendAppsRes?.applications)
+        ? backendAppsRes.applications
+        : [];
+      const mergedApps = deduplicateApplications([backendApps, fsApplications]);
+
+      const backendNotifs: NotificationItem[] = Array.isArray(backendNotifsRes?.notifications)
+        ? backendNotifsRes.notifications
+        : [];
+
+      const verifiedAdmin =
+        hydratedUser.role === 'admin' &&
+        Boolean((adminClaims as any)?.admin === true);
+
+      setHasVerifiedAdminClaim(verifiedAdmin || hydratedUser.role === 'admin');
+      setUser((prev) => {
+        if (prev.id && prev.id !== (activeUid || baseUser.id)) return prev;
+        return mergeProfileWithFirestore(prev.id ? prev : hydratedUser, fsProfile, savedResume);
+      });
+      setCertificates((prev) => deduplicateCertificates([prev, mergedCerts], activeUid));
+      setApplications((prev) => deduplicateApplications([prev, mergedApps]));
+      if (backendNotifs.length > 0 || !hasBundledInitialData) {
+        setNotifications(backendNotifs);
+      }
+
+      if (
+        cachedRecs &&
+        cachedRecs.userId === activeUid &&
+        Array.isArray(cachedRecs.recommendations) &&
+        cachedRecs.recommendations.length > 0
+      ) {
+        const currentSig = computeProfileSignature(hydratedUser);
+        if (cachedRecs.profileSignature === currentSig) {
+          const missing = Array.isArray(cachedRecs.overallMissingSkills) ? cachedRecs.overallMissingSkills : [];
+          setRecommendationsBundle({
+            userId: activeUid,
+            profileSignature: cachedRecs.profileSignature,
+            recommendations: cachedRecs.recommendations,
+            overallMissingSkills: missing,
+            topSkillGapResources: suggestResourcesForMissingSkills(
+              missing,
+              cachedRecs.recommendations[0]?.title
+            ),
+            beginnerFriendlyCount: cachedRecs.recommendations.filter((r: any) => r.isBeginnerFriendly).length,
+            updatedAt: cachedRecs.updatedAt || new Date().toISOString(),
+          });
+        } else {
+          setRecommendationsBundle(null);
+        }
+      }
+    } finally {
+      if (sessionGenRef.current === gen) {
+        setIsHydratingUserSession(false);
+      }
     }
   };
 
-  const hasFetchedPublicOpportunitiesRef = React.useRef(false);
-
+  // Load opportunities only after authentication (avoids unnecessary network work on the login screen)
   useEffect(() => {
-    const needsAllScope = isAdmin || isRecruiter || isCollege;
-    if (!hasFetchedPublicOpportunitiesRef.current || needsAllScope) {
-      hasFetchedPublicOpportunitiesRef.current = true;
+    if (!isAuthenticated) {
+      loadedOpportunitiesScopeRef.current = null;
+      return;
+    }
+    const scopeKey = isAdmin || isRecruiter || isCollege ? 'all' : 'public';
+    if (loadedOpportunitiesScopeRef.current !== scopeKey) {
+      loadedOpportunitiesScopeRef.current = scopeKey;
       void refreshOpportunities();
     }
-    if (authToken && user?.email) {
-      void Promise.all([refreshApplications(), refreshNotifications()]);
-    }
-  }, [authToken, user?.email, user?.role]);
+  }, [isAuthenticated, isAdmin, isRecruiter, isCollege]);
 
-  // Sync to local storage safely
+  // Persist ONLY non-private UI preferences & public jobs catalog to localStorage (debounced to avoid blocking UI)
   useEffect(() => {
-    try { localStorage.setItem('ym_user', JSON.stringify(user)); } catch {}
-  }, [user]);
-
-  useEffect(() => {
-    try { localStorage.setItem('ym_jobs', JSON.stringify(jobs)); } catch {}
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem('ym_jobs', JSON.stringify(jobs));
+      } catch {}
+    }, 600);
+    return () => clearTimeout(timer);
   }, [jobs]);
-
-  useEffect(() => {
-    try { localStorage.setItem('ym_applications', JSON.stringify(applications)); } catch {}
-  }, [applications]);
-
-  useEffect(() => {
-    try { localStorage.setItem('ym_certificates', JSON.stringify(certificates)); } catch {}
-  }, [certificates]);
 
   useEffect(() => {
     try { localStorage.setItem('ym_language', language); } catch {}
@@ -508,172 +861,139 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (fontSize === 'xlarge') document.body.classList.add('font-xlarge');
   }, [fontSize]);
 
-  const updateUser = (updated: Partial<UserProfile>) => {
+  // Persist profile/progress mutations (enrolledCourses, savedJobIds, xpPoints, streakDays, badges, etc.) strictly under active UID
+  const scheduleUserPersistence = useCallback((nextUser: UserProfile, safeUpdates: Partial<UserProfile>) => {
+    const currentGen = sessionGenRef.current;
+    const tokenSnapshot = localStorage.getItem('ym_auth_token');
+    const uidSnapshot = auth.currentUser?.uid || nextUser.id;
+    if (!uidSnapshot || !tokenSnapshot) return;
+
+    if (pendingProfileSyncRef.current) {
+      clearTimeout(pendingProfileSyncRef.current);
+    }
+
+    pendingProfileSyncRef.current = setTimeout(() => {
+      pendingProfileSyncRef.current = null;
+      if (sessionGenRef.current !== currentGen || activeUidRef.current !== uidSnapshot) {
+        return;
+      }
+      if (auth.currentUser && auth.currentUser.uid === uidSnapshot) {
+        syncUserProfileToFirestore(uidSnapshot, nextUser).catch(() => {});
+      }
+      updateProfileApi(tokenSnapshot, safeUpdates).catch(() => {});
+    }, 350);
+  }, []);
+
+  const updateUser = useCallback((updated: Partial<UserProfile>) => {
     setUser(prev => {
-      // Never allow profile edits to escalate or mutate user role
-      const { role: _ignoredRole, ...safeUpdates } = updated;
-      return normalizeUserProfile({ ...prev, ...safeUpdates });
+      if (!prev.id) return prev;
+      // Never allow profile edits to escalate or mutate user role or UID
+      const { role: _ignoredRole, id: _ignoredId, ...safeUpdates } = updated;
+      const nextUser = normalizeUserProfile({ ...prev, ...safeUpdates });
+      scheduleUserPersistence(nextUser, safeUpdates);
+      return nextUser;
     });
-  };
+  }, [scheduleUserPersistence]);
 
-  const setLanguage = (lang: Language) => {
+  const setLanguage = useCallback((lang: Language) => {
     setLanguageState(lang);
-  };
+  }, []);
 
-  const dismissFirstLaunch = () => {
+  const dismissFirstLaunch = useCallback(() => {
     setIsFirstLaunch(false);
-  };
+  }, []);
 
-  const toggleDarkMode = () => {
+  const toggleDarkMode = useCallback(() => {
     setDarkMode(prev => !prev);
-  };
+  }, []);
 
-  const setFontSize = (size: 'normal' | 'large' | 'xlarge') => {
+  const setFontSize = useCallback((size: 'normal' | 'large' | 'xlarge') => {
     setFontSizeState(size);
-  };
+  }, []);
 
-  const login = (token: string, newUser: UserProfile) => {
-    const normalized = normalizeUserProfile(newUser);
-    setAuthToken(token);
-    setUser(normalized);
+  const login = useCallback((token: string, newUser: UserProfile, options?: LoginSessionOptions) => {
+    // 1. Invalidate any in-flight work from previous user & wipe all previous user state & caches
+    sessionGenRef.current += 1;
+    const gen = sessionGenRef.current;
+    resetUserSessionState();
+    clearFirestoreClientCache();
+    purgeUserPrivateBrowserCaches(false);
+
+    // 2. Immediately hydrate essential user state + bundled initialData so dashboard opens instantly
+    const baseNormalized = normalizeUserProfile(newUser);
+    const mergedInitialUser = options?.preloadedProfile
+      ? mergeProfileWithFirestore(baseNormalized, options.preloadedProfile, null)
+      : baseNormalized;
+    const activeUid = mergedInitialUser.id;
+    activeUidRef.current = activeUid;
+
     localStorage.setItem('ym_auth_token', token);
-    localStorage.setItem('ym_user', JSON.stringify(normalized));
-    localStorage.setItem('ym_remembered_account', JSON.stringify({
-      name: normalized.name,
-      email: normalized.email,
-      phone: normalized.phone,
-      role: normalized.role,
-      photoUrl: normalized.photoUrl,
-    }));
+    setAuthToken(token);
+    setUser(mergedInitialUser);
+    setHasVerifiedAdminClaim(mergedInitialUser.role === 'admin');
+    setActiveTab(getDefaultTabForRole(mergedInitialUser.role));
 
-    // Automatically redirect users to their respective dashboards based on Firestore/server role
-    if (normalized.role === 'admin') {
-      setHasVerifiedAdminClaim(true);
-      setActiveTab('admin');
-    } else if (normalized.role === 'recruiter') {
-      setHasVerifiedAdminClaim(false);
-      setActiveTab('recruiter');
-    } else if (normalized.role === 'experienced') {
-      setHasVerifiedAdminClaim(false);
-      setActiveTab('experienced');
-    } else if (normalized.role === 'college') {
-      setHasVerifiedAdminClaim(false);
-      setActiveTab('college');
-    } else {
-      setHasVerifiedAdminClaim(false);
-      setActiveTab('home');
+    if (options?.initialData) {
+      const initCerts = Array.isArray(options.initialData.certificates) ? options.initialData.certificates : [];
+      const initApps = Array.isArray(options.initialData.applications) ? options.initialData.applications : [];
+      const initNotifs = Array.isArray(options.initialData.notifications) ? options.initialData.notifications : [];
+      setCertificates(deduplicateCertificates([initCerts], activeUid));
+      setApplications(deduplicateApplications([initApps]));
+      setNotifications(initNotifs);
     }
-  };
 
-  const logout = () => {
-    if (authToken) {
-      logoutApi(authToken);
-    }
-    signOutUser();
+    // Never block the user behind a full-screen waiting wall once authenticated
+    setIsHydratingUserSession(false);
+
+    // 3. Hydrate remaining Firestore subcollections in the background (skipped for brand-new accounts)
+    void hydrateUserSession(token, mergedInitialUser, gen, options);
+  }, []);
+
+  const logout = useCallback(() => {
+    // 1. Invalidate any in-flight async hydration or fetches immediately
+    sessionGenRef.current += 1;
+    const tokenToRevoke = localStorage.getItem('ym_auth_token');
+
+    // 2. Clear all in-memory user data & client Firestore caches
+    resetUserSessionState();
+    clearFirestoreClientCache();
     setAuthToken(null);
-    setUser(EMPTY_USER);
-    setApplications([]);
-    setNotifications([]);
-    setRecommendationsBundle(null);
-    setRecommendationsError(null);
-    setRecommendationSourceStatus(null);
-    setOpenApplyModal(false);
-    setHasVerifiedAdminClaim(false);
-    localStorage.removeItem('ym_auth_token');
-    localStorage.removeItem('ym_user');
-    localStorage.removeItem('ym_applications');
+    setIsHydratingUserSession(false);
+
+    // 3. Clear all user-specific cached data from localStorage & sessionStorage
+    purgeUserPrivateBrowserCaches(true);
+
+    // 4. Properly terminate both backend session & Firebase Authentication session
+    if (tokenToRevoke) {
+      void logoutApi(tokenToRevoke);
+    }
+    void signOutUser();
+
     setActiveTab('home');
     if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
       window.history.replaceState({}, '', '/');
     }
-  };
+  }, []);
 
-  // Monitor Firebase Auth custom claims & hydrate persisted Firestore profile, resume, and private recommendations on refresh
+  // Monitor Firebase Auth state strictly for admin custom-claims verification (no duplicate Firestore reads!)
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        if (fbUser.emailVerified) {
-          try {
-            const claims = await getFirebaseCustomClaims(false);
+      if (!fbUser) {
+        setHasVerifiedAdminClaim(false);
+        return;
+      }
+
+      const gen = sessionGenRef.current;
+      if (fbUser.emailVerified) {
+        try {
+          const claims = await getFirebaseCustomClaims(false);
+          if (sessionGenRef.current === gen) {
             setHasVerifiedAdminClaim(claims.admin === true);
-          } catch {
+          }
+        } catch {
+          if (sessionGenRef.current === gen) {
             setHasVerifiedAdminClaim(false);
           }
-        } else {
-          setHasVerifiedAdminClaim(false);
-        }
-
-        try {
-          const [savedResume, fsProfile, cachedRecs] = await Promise.all([
-            getSavedResumeFromFirestore(fbUser.uid).catch(() => null),
-            getUserProfileFromFirestore(fbUser.uid).catch(() => null),
-            getStudentRecommendationsFromFirestore(fbUser.uid).catch(() => null),
-          ]);
-
-          let nextNormalizedUser: UserProfile | null = null;
-          setUser((prev) => {
-            const prevEmail = (prev.email || '').toLowerCase();
-            const fbEmail = (fbUser.email || '').toLowerCase();
-            if (prev.id && prevEmail && fbEmail && prevEmail !== fbEmail) {
-              return prev;
-            }
-            const mergedFromFs: Partial<UserProfile> = {};
-            if (fsProfile) {
-              const scalarKeys: Array<keyof UserProfile> = [
-                'name', 'phone', 'education', 'institution', 'college', 'course',
-                'branch', 'studyYear', 'rollNumber', 'cgpa', 'graduationYear',
-                'location', 'preferredLocation', 'preferredDomain', 'careerGoals',
-                'workModePreference', 'githubUrl', 'linkedinUrl', 'portfolioUrl', 'photoUrl'
-              ];
-              for (const k of scalarKeys) {
-                if (fsProfile[k]) {
-                  (mergedFromFs as any)[k] = fsProfile[k];
-                }
-              }
-              if (typeof fsProfile.age === 'number') mergedFromFs.age = fsProfile.age;
-              const arrKeys: Array<keyof UserProfile> = ['skills', 'nonTechnicalSkills', 'interests', 'preferredRoles', 'savedJobIds', 'badges'];
-              for (const k of arrKeys) {
-                if (Array.isArray(fsProfile[k]) && fsProfile[k].length > 0) {
-                  (mergedFromFs as any)[k] = fsProfile[k];
-                }
-              }
-            }
-            nextNormalizedUser = normalizeUserProfile({
-              ...prev,
-              ...mergedFromFs,
-              ...(savedResume ? {
-                resumeFileName: savedResume.fileName,
-                resumeText: savedResume.text,
-                resumeUpdatedAt: savedResume.updatedAt,
-              } : {}),
-            });
-            return nextNormalizedUser;
-          });
-
-          if (cachedRecs && Array.isArray(cachedRecs.recommendations) && cachedRecs.recommendations.length > 0) {
-            const targetUser = nextNormalizedUser || user;
-            const currentSig = computeProfileSignature(targetUser);
-            if (cachedRecs.profileSignature === currentSig) {
-              const missing = Array.isArray(cachedRecs.overallMissingSkills) ? cachedRecs.overallMissingSkills : [];
-              setRecommendationsBundle({
-                userId: fbUser.uid,
-                profileSignature: cachedRecs.profileSignature,
-                recommendations: cachedRecs.recommendations,
-                overallMissingSkills: missing,
-                topSkillGapResources: suggestResourcesForMissingSkills(
-                  missing,
-                  cachedRecs.recommendations[0]?.title
-                ),
-                beginnerFriendlyCount: cachedRecs.recommendations.filter((r: any) => r.isBeginnerFriendly).length,
-                updatedAt: cachedRecs.updatedAt || new Date().toISOString(),
-              });
-            }
-          }
-
-          // Hydrate verified Indian internships stored in Firestore once Firebase Auth is ready
-          void refreshOpportunities();
-        } catch {
-          // Non-fatal if offline; localStorage still serves cached profile
         }
       } else {
         setHasVerifiedAdminClaim(false);
@@ -682,22 +1002,138 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsub();
   }, []);
 
-  const recommendationsInFlightSigRef = React.useRef<string | null>(null);
+  // Restore remembered session seamlessly on initial page reload (backend token OR persisted Firebase Auth session)
+  useEffect(() => {
+    const savedToken = localStorage.getItem('ym_auth_token');
+    sessionGenRef.current += 1;
+    const gen = sessionGenRef.current;
+
+    const tryRestoreFromFirebaseSession = async () => {
+      try {
+        const fbUser = await waitForFirebaseAuthReady(1500);
+        if (sessionGenRef.current !== gen || !fbUser) return false;
+        const email = (fbUser.email || '').toLowerCase();
+        if (!email) return false;
+
+        const [idToken, fsProfile] = await Promise.all([
+          fbUser.getIdToken(false),
+          getUserProfileFromFirestore(fbUser.uid).catch(() => null),
+        ]);
+        if (sessionGenRef.current !== gen) return false;
+
+        const resolvedRole = fsProfile?.role;
+        // Never auto-restore admin sessions on public reload without explicit claim check
+        if (resolvedRole === 'admin') return false;
+
+        const backendRes = await firebaseLoginApi({
+          firebaseUid: fbUser.uid,
+          idToken,
+          email,
+          name: fsProfile?.name || fbUser.displayName || email.split('@')[0] || 'Yuva Member',
+          role: resolvedRole,
+          photoUrl: fbUser.photoURL || '',
+          currentRole: fsProfile?.currentRole,
+          yearsOfExperience: fsProfile?.yearsOfExperience,
+          rememberMe: true,
+        });
+        if (sessionGenRef.current !== gen || !backendRes?.user) return false;
+
+        const restoredUser = mergeProfileWithFirestore(
+          normalizeUserProfile({ ...backendRes.user, id: fbUser.uid }),
+          fsProfile,
+          null
+        );
+        activeUidRef.current = restoredUser.id;
+        localStorage.setItem('ym_auth_token', backendRes.token);
+        setAuthToken(backendRes.token);
+        setUser(restoredUser);
+        setActiveTab(getDefaultTabForRole(restoredUser.role));
+        if (backendRes.initialData) {
+          setCertificates(deduplicateCertificates([backendRes.initialData.certificates || []], restoredUser.id));
+          setApplications(deduplicateApplications([backendRes.initialData.applications || []]));
+          setNotifications(Array.isArray(backendRes.initialData.notifications) ? backendRes.initialData.notifications : []);
+        }
+        setIsHydratingUserSession(false);
+
+        void hydrateUserSession(backendRes.token, restoredUser, gen, {
+          initialData: backendRes.initialData,
+          preloadedProfile: fsProfile,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!savedToken || savedToken === 'token-demo-session') {
+      purgeUserPrivateBrowserCaches(true);
+      setIsHydratingUserSession(false);
+      // Silently check if Firebase still has a remembered session so users don't have to log in again
+      void tryRestoreFromFirebaseSession();
+      return;
+    }
+
+    setIsHydratingUserSession(true);
+
+    fetchCurrentUserApi(savedToken)
+      .then(async (data) => {
+        if (sessionGenRef.current !== gen) return;
+        if (data?.user) {
+          const normalized = normalizeUserProfile(data.user);
+          activeUidRef.current = normalized.id;
+          setAuthToken(savedToken);
+          setUser(normalized);
+          setHasVerifiedAdminClaim(normalized.role === 'admin');
+          setActiveTab(getDefaultTabForRole(normalized.role));
+          if (data.initialData) {
+            setCertificates(deduplicateCertificates([data.initialData.certificates || []], normalized.id));
+            setApplications(deduplicateApplications([data.initialData.applications || []]));
+            setNotifications(Array.isArray(data.initialData.notifications) ? data.initialData.notifications : []);
+          }
+          // Immediately reveal dashboard while Firestore subcollections sync in background
+          setIsHydratingUserSession(false);
+          void hydrateUserSession(savedToken, normalized, gen, { initialData: data.initialData });
+        } else {
+          const restored = await tryRestoreFromFirebaseSession();
+          if (!restored && sessionGenRef.current === gen) {
+            resetUserSessionState();
+            purgeUserPrivateBrowserCaches(true);
+            setAuthToken(null);
+            setIsHydratingUserSession(false);
+          }
+        }
+      })
+      .catch(async () => {
+        if (sessionGenRef.current !== gen) return;
+        const restored = await tryRestoreFromFirebaseSession();
+        if (!restored && sessionGenRef.current === gen) {
+          resetUserSessionState();
+          purgeUserPrivateBrowserCaches(true);
+          setAuthToken(null);
+          setIsHydratingUserSession(false);
+        }
+      });
+  }, []);
 
   const refreshRecommendations = async (force: boolean = false) => {
+    if (!user?.id || isHydratingUserSession) return;
+    const gen = sessionGenRef.current;
+    const targetUid = auth.currentUser?.uid || user.id;
     const currentSig = computeProfileSignature(user);
+
     if (
       !force &&
+      recommendationsBundle?.userId === targetUid &&
       recommendationsBundle?.profileSignature === currentSig &&
       recommendationsBundle.recommendations.length > 0
     ) {
       return;
     }
-    if (!force && recommendationsInFlightSigRef.current === currentSig) {
+    if (!force && recommendationsInFlightSigRef.current === `${targetUid}:${currentSig}`) {
       return;
     }
 
-    recommendationsInFlightSigRef.current = currentSig;
+    recommendationsInFlightSigRef.current = `${targetUid}:${currentSig}`;
     setIsLoadingRecommendations(true);
     setRecommendationsError(null);
 
@@ -707,6 +1143,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : [];
 
       const res = await fetchPersonalizedRecommendationsApi(user, 8, firestoreInternships);
+      if (sessionGenRef.current !== gen) return;
+
       const recs = Array.isArray(res?.recommendations) ? res.recommendations : [];
       const overallMissingSkills = Array.isArray(res?.overallMissingSkills) ? res.overallMissingSkills : [];
       const topSkillGapResources = Array.isArray(res?.topSkillGapResources)
@@ -714,7 +1152,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : suggestResourcesForMissingSkills(overallMissingSkills, recs[0]?.title);
 
       const bundle: StudentRecommendationBundle = {
-        userId: auth.currentUser?.uid || user.id || 'guest',
+        userId: targetUid,
         profileSignature: res?.profileSignature || currentSig,
         recommendations: recs,
         overallMissingSkills,
@@ -731,22 +1169,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setRecommendationSourceStatus(res.sourceStatus);
       }
 
-      if (auth.currentUser?.uid) {
+      if (auth.currentUser?.uid && auth.currentUser.uid === targetUid) {
         saveStudentRecommendationsToFirestore(auth.currentUser.uid, bundle).catch(() => {});
       }
     } catch (err: any) {
-      setRecommendationsError(err?.message || 'Unable to compute personalized internship matches right now.');
+      if (sessionGenRef.current === gen) {
+        setRecommendationsError(err?.message || 'Unable to compute personalized internship matches right now.');
+      }
     } finally {
-      if (recommendationsInFlightSigRef.current === currentSig) {
+      if (recommendationsInFlightSigRef.current === `${targetUid}:${currentSig}`) {
         recommendationsInFlightSigRef.current = null;
       }
-      setIsLoadingRecommendations(false);
+      if (sessionGenRef.current === gen) {
+        setIsLoadingRecommendations(false);
+      }
     }
   };
 
-  // Automatically analyze student profile & recompute matches on load and whenever profile changes
+  // Automatically analyze student profile & recompute matches whenever the authenticated student's profile changes
   const profileSignature = computeProfileSignature(user);
   useEffect(() => {
+    if (!isAuthenticated || isHydratingUserSession) {
+      return;
+    }
     if (user.role !== 'student' && user.role !== 'experienced') {
       return;
     }
@@ -754,57 +1199,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       void refreshRecommendations(false);
     }, 300);
     return () => clearTimeout(timer);
-  }, [profileSignature, user.role]);
-
-  // Restore session token on load
-  useEffect(() => {
-    const savedToken = localStorage.getItem('ym_auth_token');
-    if (savedToken && savedToken !== 'token-demo-session') {
-      fetchCurrentUserApi(savedToken)
-        .then(async (data) => {
-          if (data?.user) {
-            const fbUser = auth.currentUser;
-            const savedResume = fbUser
-              ? await getSavedResumeFromFirestore(fbUser.uid).catch(() => null)
-              : null;
-            const restored = normalizeUserProfile({
-              ...data.user,
-              ...(savedResume?.fileName ? { resumeFileName: savedResume.fileName } : {}),
-              ...(savedResume?.text ? { resumeText: savedResume.text } : {}),
-              ...(savedResume?.updatedAt ? { resumeUpdatedAt: savedResume.updatedAt } : {}),
-            });
-            if (restored.role === 'admin') {
-              // Admin session also requires verified Firebase custom claim on current auth user
-              if (fbUser && fbUser.emailVerified) {
-                const claims = await getFirebaseCustomClaims(false).catch(() => ({}));
-                if ((claims as any).admin === true) {
-                  setHasVerifiedAdminClaim(true);
-                  setUser(restored);
-                  setActiveTab('admin');
-                  return;
-                }
-              }
-              setUser(restored);
-              setActiveTab('admin');
-              return;
-            }
-            setUser(restored);
-            if (restored.role === 'recruiter') {
-              setActiveTab('recruiter');
-            } else if (restored.role === 'experienced') {
-              setActiveTab('experienced');
-            } else if (restored.role === 'college') {
-              setActiveTab('college');
-            }
-          }
-        })
-        .catch(() => {
-          localStorage.removeItem('ym_auth_token');
-          setAuthToken(null);
-          setHasVerifiedAdminClaim(false);
-        });
-    }
-  }, []);
+  }, [isAuthenticated, isHydratingUserSession, user.id, profileSignature, user.role]);
 
   const refreshUserLocation = (): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -819,7 +1214,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
           (err) => {
             console.warn('Geolocation error or denied:', err);
-            // Default to Delhi Connaught Place
             setUserLocation({ lat: 28.6315, lng: 77.2167 });
             resolve(false);
           },
@@ -845,6 +1239,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const applyForJob = async (job: Job, coverLetter: string, eligibilityScore?: number): Promise<boolean> => {
+    if (!authToken || !user.id) return false;
     const exists = applications.some(app => app.jobId === job.id);
     if (exists) return false;
 
@@ -878,6 +1273,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setApplications(prev => [createdApp, ...prev]);
 
+    if (auth.currentUser?.uid) {
+      saveUserApplicationToFirestore(auth.currentUser.uid, createdApp).catch(() => {});
+    }
+
     updateUser({
       xpPoints: (user.xpPoints || 0) + 100,
       badges: user.badges.includes('Job Hunter') ? user.badges : [...user.badges, 'Job Hunter']
@@ -886,6 +1285,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev => [
       {
         id: `notif-${Date.now()}`,
+        userId: user.id,
         title: `Applied to ${job.company}`,
         message: `Your application for "${job.title}" has been successfully submitted!`,
         date: 'Just now',
@@ -910,6 +1310,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
+  const updateApplicationSchedule = async (
+    appId: string,
+    details: {
+      status?: Application['status'];
+      interviewDate?: string;
+      interviewTime?: string;
+      interviewMode?: 'Online (Google Meet/Zoom)' | 'In-Person / Campus';
+      interviewLinkOrVenue?: string;
+      notes?: string;
+    }
+  ) => {
+    let savedApp: Application | undefined;
+    try {
+      const res = await updateApplicationScheduleApi(authToken, appId, details);
+      savedApp = res?.application;
+    } catch (err: any) {
+      // Allow persisting interview schedule to Firestore if the application exists only in Firestore
+      const localApp = applications.find(a => a.id === appId);
+      if (!localApp) throw err;
+      savedApp = {
+        ...localApp,
+        ...details,
+        status: details.status || (details.interviewDate && (localApp.status === 'Applied' || localApp.status === 'Under Review') ? 'Interview' : localApp.status),
+        updatedDate: new Date().toISOString().split('T')[0],
+      };
+    }
+
+    if (!savedApp) return;
+    const finalized = savedApp;
+    setApplications(prev => prev.map(app => (app.id === appId ? finalized : app)));
+
+    if (auth.currentUser?.uid && (finalized.candidateId === auth.currentUser.uid || !finalized.candidateId)) {
+      saveUserApplicationToFirestore(auth.currentUser.uid, finalized).catch(() => {});
+    }
+
+    if (finalized.interviewDate) {
+      setNotifications(prev => [
+        {
+          id: `notif-${Date.now()}`,
+          userId: user.id,
+          title: `Interview Reminder: ${finalized.company}`,
+          message: `Scheduled for "${finalized.jobTitle}" on ${finalized.interviewDate}${finalized.interviewTime ? ` at ${finalized.interviewTime}` : ''}.`,
+          date: 'Just now',
+          type: 'interview',
+          read: false,
+          actionTab: 'applications',
+        },
+        ...prev,
+      ]);
+    }
+  };
+
   const addJob = async (jobData: Omit<Job, 'id' | 'postedDate' | 'applicantsCount'>): Promise<boolean> => {
     const res = await postOpportunityApi(authToken, jobData);
     const createdJob = res?.job || res?.opportunity;
@@ -917,7 +1369,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw new Error(res?.error || 'Backend did not return created opportunity.');
     }
 
-    // Store verified Indian internships in Firebase Firestore (/internships) when signed in with write privileges
     if (
       auth.currentUser &&
       (isAdmin || isRecruiter || isCollege) &&
@@ -996,9 +1447,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const issueCertificate = (course: Course, scorePercentage: number): Certificate => {
-    const code = `YM-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const ownerUid = auth.currentUser?.uid || user.id;
+    const code = `YM-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
     const newCert: Certificate = {
       id: `cert-${Date.now()}`,
+      userId: ownerUid,
       certificateCode: code,
       studentName: user.name,
       courseId: course.id,
@@ -1007,9 +1460,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       scorePercentage,
       qrData: `https://yuvamitraa.gov.in/verify/${code}`,
       instructor: course.instructor,
+      source: 'earned',
+      issuer: 'YuvaMitraa Skill Foundation',
     };
 
-    setCertificates(prev => [newCert, ...prev]);
+    setCertificates(prev => deduplicateCertificates([[newCert], prev], ownerUid));
 
     const existingEnrolled = user.enrolledCourses.find(e => e.courseId === course.id);
     const updatedEnrolled = existingEnrolled
@@ -1022,8 +1477,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       badges: user.badges.includes('Certified Champion') ? user.badges : [...user.badges, 'Certified Champion']
     });
 
+    if (auth.currentUser?.uid && auth.currentUser.uid === ownerUid) {
+      saveUserCertificateToFirestore(auth.currentUser.uid, newCert).catch(() => {});
+    }
+
     if (authToken) {
-      issueCertificateApi(authToken, course.id, scorePercentage).catch((err) => {
+      issueCertificateApi(authToken, course.id, scorePercentage, {
+        id: newCert.id,
+        certificateCode: newCert.certificateCode,
+        courseTitle: newCert.courseTitle,
+        instructor: newCert.instructor,
+        issueDate: newCert.issueDate,
+        qrData: newCert.qrData,
+      }).catch((err) => {
         console.warn('Certificate backend sync warning:', err);
       });
     }
@@ -1031,6 +1497,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev => [
       {
         id: `notif-${Date.now()}`,
+        userId: ownerUid,
         title: '🎓 Certificate Earned!',
         message: `Congratulations! You successfully passed "${course.title}" with ${scorePercentage}%. Download your certificate now.`,
         date: 'Just now',
@@ -1044,83 +1511,172 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newCert;
   };
 
+  const uploadCertificate = async (payload: {
+    courseTitle: string;
+    issuer: string;
+    issueDate: string;
+    certificateCode?: string;
+    credentialUrl?: string;
+    fileName?: string;
+  }): Promise<Certificate> => {
+    if (!authToken || !user.id) {
+      throw new Error('Please sign in to upload a certificate.');
+    }
+    const ownerUid = auth.currentUser?.uid || user.id;
+    const localId = `cert-up-${Date.now()}`;
+    const res = await uploadCertificateApi(authToken, { ...payload, id: localId });
+    const created: Certificate = {
+      ...(res.certificate as Certificate),
+      userId: ownerUid,
+      source: 'uploaded',
+    };
+
+    setCertificates(prev => deduplicateCertificates([[created], prev], ownerUid));
+
+    if (auth.currentUser?.uid && auth.currentUser.uid === ownerUid) {
+      await saveUserCertificateToFirestore(auth.currentUser.uid, created).catch(() => {});
+    }
+
+    return created;
+  };
+
+  const deleteCertificate = async (certificateId: string): Promise<void> => {
+    if (!authToken || !user.id) {
+      throw new Error('Authentication required to delete a certificate.');
+    }
+    const ownerUid = auth.currentUser?.uid || user.id;
+    await deleteCertificateApi(authToken, certificateId).catch(() => {});
+    if (auth.currentUser?.uid && auth.currentUser.uid === ownerUid) {
+      await deleteUserCertificateFromFirestore(auth.currentUser.uid, certificateId).catch(() => {});
+    }
+    setCertificates(prev => prev.filter(c => c.id !== certificateId));
+  };
+
   const markNotificationRead = (id: string) => {
     setNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, read: true } : n))
     );
-    markNotificationReadApi(id).catch(() => {});
+    if (authToken) {
+      markNotificationReadApi(id, authToken).catch(() => {});
+    }
   };
 
-  const t = (key: string): string => {
+  const t = useCallback((key: string): string => {
     const dict = UI_TRANSLATIONS[language] || UI_TRANSLATIONS['English'];
     return dict[key] || UI_TRANSLATIONS['English'][key] || key;
-  };
+  }, [language]);
+
+  const contextValue = useMemo<AppContextType>(() => ({
+    user,
+    updateUser,
+    language,
+    setLanguage,
+    activeTab,
+    setActiveTab,
+    selectedJobForDetail,
+    setSelectedJobForDetail,
+    openApplyModal,
+    setOpenApplyModal,
+    openJobApplyModal,
+    selectedCourseForPlayer,
+    setSelectedCourseForPlayer,
+    courses: SAMPLE_COURSES,
+    jobs,
+    addJob,
+    updateJob,
+    deleteJob,
+    applications,
+    applyForJob,
+    updateApplicationStatus,
+    updateApplicationSchedule,
+    savedJobIds: user.savedJobIds,
+    toggleSaveJob,
+    certificates,
+    issueCertificate,
+    uploadCertificate,
+    deleteCertificate,
+    notifications,
+    markNotificationRead,
+    darkMode,
+    toggleDarkMode,
+    fontSize,
+    setFontSize,
+    userLocation,
+    refreshUserLocation,
+    calculateDistance,
+    isRecruiter,
+    isExperienced,
+    isCollege,
+    isAdmin,
+    hasVerifiedAdminClaim,
+    role,
+    t,
+    isFirstLaunch,
+    dismissFirstLaunch,
+    viewportMode,
+    setViewportMode,
+    toggleViewportMode,
+    isAuthenticated,
+    isHydratingUserSession,
+    authToken,
+    login,
+    logout,
+    refreshOpportunities,
+    isLoadingOpportunities,
+    opportunitiesError,
+    opportunitiesLastSyncedAt,
+    firestoreInternshipsCount,
+    refreshApplications,
+    recommendationsBundle,
+    isLoadingRecommendations,
+    recommendationsError,
+    recommendationSourceStatus,
+    refreshRecommendations,
+  }), [
+    user,
+    updateUser,
+    language,
+    setLanguage,
+    activeTab,
+    selectedJobForDetail,
+    openApplyModal,
+    selectedCourseForPlayer,
+    jobs,
+    applications,
+    certificates,
+    notifications,
+    darkMode,
+    toggleDarkMode,
+    fontSize,
+    setFontSize,
+    userLocation,
+    isRecruiter,
+    isExperienced,
+    isCollege,
+    isAdmin,
+    hasVerifiedAdminClaim,
+    role,
+    t,
+    isFirstLaunch,
+    dismissFirstLaunch,
+    viewportMode,
+    isAuthenticated,
+    isHydratingUserSession,
+    authToken,
+    login,
+    logout,
+    isLoadingOpportunities,
+    opportunitiesError,
+    opportunitiesLastSyncedAt,
+    firestoreInternshipsCount,
+    recommendationsBundle,
+    isLoadingRecommendations,
+    recommendationsError,
+    recommendationSourceStatus,
+  ]);
 
   return (
-    <AppContext.Provider
-      value={{
-        user,
-        updateUser,
-        language,
-        setLanguage,
-        activeTab,
-        setActiveTab,
-        selectedJobForDetail,
-        setSelectedJobForDetail,
-        openApplyModal,
-        setOpenApplyModal,
-        openJobApplyModal,
-        selectedCourseForPlayer,
-        setSelectedCourseForPlayer,
-        courses: SAMPLE_COURSES,
-        jobs,
-        addJob,
-        updateJob,
-        deleteJob,
-        applications,
-        applyForJob,
-        updateApplicationStatus,
-        savedJobIds: user.savedJobIds,
-        toggleSaveJob,
-        certificates,
-        issueCertificate,
-        notifications,
-        markNotificationRead,
-        darkMode,
-        toggleDarkMode,
-        fontSize,
-        setFontSize,
-        userLocation,
-        refreshUserLocation,
-        calculateDistance,
-        isRecruiter,
-        isExperienced,
-        isCollege,
-        isAdmin,
-        hasVerifiedAdminClaim,
-        role,
-        t,
-        isFirstLaunch,
-        dismissFirstLaunch,
-        viewportMode,
-        setViewportMode,
-        toggleViewportMode,
-        isAuthenticated,
-        authToken,
-        login,
-        logout,
-        refreshOpportunities,
-        isLoadingOpportunities,
-        opportunitiesError,
-        firestoreInternshipsCount,
-        refreshApplications,
-        recommendationsBundle,
-        isLoadingRecommendations,
-        recommendationsError,
-        recommendationSourceStatus,
-        refreshRecommendations,
-      }}
-    >
+    <AppContext.Provider value={contextValue}>
       {children}
     </AppContext.Provider>
   );

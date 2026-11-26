@@ -1,6 +1,9 @@
 import { initializeApp, getApps } from 'firebase/app';
 import { 
   getAuth, 
+  setPersistence,
+  browserLocalPersistence,
+  browserSessionPersistence,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -27,10 +30,12 @@ import {
   setDoc, 
   updateDoc, 
   deleteDoc,
-  getDocFromServer 
+  getDocFromServer,
+  serverTimestamp
 } from 'firebase/firestore';
 import defaultFirebaseConfig from '../../firebase-applet-config.json';
-import { InternshipListing, StudentRecommendationBundle } from '../types';
+import { Application, Certificate, InternshipListing, StudentRecommendationBundle } from '../types';
+import { normalizeTimestampToIso } from '../utils/relativeTime';
 
 // Use provisioned firebase-applet-config.json as authoritative configuration (fallback to VITE_FIREBASE_* if unset)
 export const firebaseConfig = {
@@ -130,9 +135,19 @@ export function handleFirestoreError(
 
 /**
  * 1. Email & Password Authentication (Login)
+ * Respects rememberMe by using browserLocalPersistence (default) vs browserSessionPersistence.
  */
-export async function loginWithEmailPassword(email: string, password: string): Promise<UserCredential> {
+export async function loginWithEmailPassword(
+  email: string,
+  password: string,
+  rememberMe: boolean = true
+): Promise<UserCredential> {
   const cleanEmail = email.trim().toLowerCase();
+  try {
+    await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+  } catch {
+    // Fallback to default browser persistence in restricted iframe environments
+  }
   return await signInWithEmailAndPassword(auth, cleanEmail, password);
 }
 
@@ -145,6 +160,11 @@ export async function registerWithEmailPassword(
   password: string
 ): Promise<UserCredential> {
   const cleanEmail = email.trim().toLowerCase();
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+  } catch {
+    // Non-fatal in restricted storage contexts
+  }
   const credential = await createUserWithEmailAndPassword(auth, cleanEmail, password);
   
   if (credential.user && name.trim()) {
@@ -156,6 +176,45 @@ export async function registerWithEmailPassword(
   }
 
   return credential;
+}
+
+/**
+ * Wait briefly for Firebase Auth to restore persisted local session on page load.
+ */
+export async function waitForFirebaseAuthReady(timeoutMs: number = 2500): Promise<FirebaseUser | null> {
+  if (auth.currentUser) return auth.currentUser;
+  if (typeof (auth as any).authStateReady === 'function') {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        (auth as any).authStateReady(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    return auth.currentUser;
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        unsub();
+        resolve(auth.currentUser);
+      }
+    }, timeoutMs);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        unsub();
+        resolve(u);
+      }
+    });
+  });
 }
 
 /**
@@ -260,6 +319,9 @@ export async function signInWithGoogle(): Promise<UserCredential | { user: Googl
       (err.message && err.message.toLowerCase().includes('popup blocked'))
     ) {
       console.warn('Popup blocked, falling back to signInWithRedirect:', err.code);
+      try {
+        sessionStorage.setItem('ym_google_redirect_pending', '1');
+      } catch {}
       await signInWithRedirect(auth, googleProvider);
       return null;
     }
@@ -276,10 +338,17 @@ export async function signInWithGoogle(): Promise<UserCredential | { user: Googl
 }
 
 /**
- * Check redirect result on page load (silences uninitiated passive errors)
+ * Check redirect result on page load — skips network check unless a redirect was actually initiated
  */
 export async function checkRedirectResult(): Promise<UserCredential | null> {
   try {
+    const hasPendingRedirect =
+      typeof sessionStorage !== 'undefined' &&
+      sessionStorage.getItem('ym_google_redirect_pending') === '1';
+    if (!hasPendingRedirect) {
+      return null;
+    }
+    sessionStorage.removeItem('ym_google_redirect_pending');
     const result = await getRedirectResult(auth);
     return result;
   } catch (err: any) {
@@ -291,9 +360,10 @@ export async function checkRedirectResult(): Promise<UserCredential | null> {
 }
 
 /**
- * 5. Sign Out User
+ * 5. Sign Out User (always purges per-UID Firestore memory cache)
  */
 export async function signOutUser(): Promise<void> {
+  clearFirestoreClientCache();
   try {
     await signOut(auth);
   } catch (err) {
@@ -302,20 +372,32 @@ export async function signOutUser(): Promise<void> {
 }
 
 /**
- * Connection test helper with 4s timeout safeguard
+ * Connection test helper with 2s timeout safeguard.
+ * Proactively detects stalled WebChannel in proxied/iframe networks so login reads use fast REST immediately.
  */
 export async function testConnection(): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err: any = new Error('timeout');
+        err.code = 'unavailable';
+        reject(err);
+      }, 2000);
+    });
     await Promise.race([
       getDocFromServer(doc(db, 'test', 'connection')),
       timeoutPromise
     ]);
     return true;
-  } catch (error) {
-    // Graceful offline readiness: avoid unhandled rejection or blocking errors
-    console.info('Firestore client ready (offline-first mode active)');
+  } catch (error: any) {
+    if (isOfflineOrUnavailableError(error)) {
+      preferRestFirestore = true;
+    }
+    console.info('Firestore client ready (adaptive REST/SDK transport active)');
     return true;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -329,11 +411,23 @@ export async function sendVerificationEmail(user?: FirebaseUser | null): Promise
 }
 
 /**
- * Retrieve fresh Firebase ID token and parsed custom claims
+ * Retrieve fresh Firebase ID token and parsed custom claims (single call)
  */
 export async function getFirebaseIdToken(forceRefresh: boolean = false): Promise<string | null> {
   if (!auth.currentUser) return null;
   return await auth.currentUser.getIdToken(forceRefresh);
+}
+
+export async function getFirebaseTokenAndClaims(forceRefresh: boolean = false): Promise<{
+  token: string | null;
+  claims: Record<string, any>;
+}> {
+  if (!auth.currentUser) return { token: null, claims: {} };
+  const tokenResult = await auth.currentUser.getIdTokenResult(forceRefresh);
+  return {
+    token: tokenResult.token || null,
+    claims: tokenResult.claims || {},
+  };
 }
 
 export async function getFirebaseCustomClaims(forceRefresh: boolean = false): Promise<Record<string, any>> {
@@ -342,9 +436,89 @@ export async function getFirebaseCustomClaims(forceRefresh: boolean = false): Pr
   return tokenResult.claims || {};
 }
 
+// Per-UID short-TTL in-memory cache & in-flight request deduplication (prevents duplicate Firestore reads)
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+const firestoreReadCache = new Map<string, CacheEntry<any>>();
+const inflightFirestoreReads = new Map<string, Promise<any>>();
+const pendingProfileCreateByUid = new Map<string, Promise<any>>();
+
+const USER_DOC_CACHE_TTL_MS = 30_000;
+const CATALOG_CACHE_TTL_MS = 60_000;
+
+function getCachedRead<T>(key: string): { hit: boolean; value?: T } {
+  const entry = firestoreReadCache.get(key);
+  if (!entry) return { hit: false };
+  if (Date.now() > entry.expiresAt) {
+    firestoreReadCache.delete(key);
+    return { hit: false };
+  }
+  return { hit: true, value: entry.value as T };
+}
+
+function setCachedRead<T>(key: string, value: T, ttlMs: number = USER_DOC_CACHE_TTL_MS): void {
+  firestoreReadCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+
+function invalidateCacheKey(key: string): void {
+  firestoreReadCache.delete(key);
+}
+
+/**
+ * Clear strictly UID-scoped Firestore read caches on logout or account switch.
+ */
+export function clearFirestoreClientCache(uid?: string): void {
+  if (!uid) {
+    firestoreReadCache.clear();
+    inflightFirestoreReads.clear();
+    pendingProfileCreateByUid.clear();
+    return;
+  }
+  for (const key of Array.from(firestoreReadCache.keys())) {
+    if (key.includes(`:${uid}`)) {
+      firestoreReadCache.delete(key);
+    }
+  }
+  for (const key of Array.from(inflightFirestoreReads.keys())) {
+    if (key.includes(`:${uid}`)) {
+      inflightFirestoreReads.delete(key);
+    }
+  }
+}
+
+async function cachedFirestoreRead<T>(
+  key: string,
+  ttlMs: number,
+  loader: () => Promise<T>,
+  forceRefresh: boolean = false
+): Promise<T> {
+  if (!forceRefresh) {
+    const cached = getCachedRead<T>(key);
+    if (cached.hit) return cached.value as T;
+    const inflight = inflightFirestoreReads.get(key);
+    if (inflight) return inflight as Promise<T>;
+  }
+
+  const p = loader()
+    .then((val) => {
+      setCachedRead(key, val, ttlMs);
+      return val;
+    })
+    .finally(() => {
+      if (inflightFirestoreReads.get(key) === p) {
+        inflightFirestoreReads.delete(key);
+      }
+    });
+
+  inflightFirestoreReads.set(key, p);
+  return p;
+}
+
 let preferRestFirestore = false;
-const FIRESTORE_SDK_TIMEOUT_MS = 4000;
-const FIRESTORE_REST_TIMEOUT_MS = 12000;
+const FIRESTORE_SDK_TIMEOUT_MS = 2000;
+const FIRESTORE_REST_TIMEOUT_MS = 10000;
 
 async function withSdkTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   promise.catch(() => {});
@@ -447,6 +621,7 @@ function toFirestoreValue(v: any): any {
 function fromFirestoreValue(v: any): any {
   if (!v || typeof v !== 'object') return undefined;
   if ('stringValue' in v) return v.stringValue;
+  if ('timestampValue' in v) return v.timestampValue;
   if ('integerValue' in v) return Number(v.integerValue);
   if ('doubleValue' in v) return Number(v.doubleValue);
   if ('booleanValue' in v) return Boolean(v.booleanValue);
@@ -498,44 +673,119 @@ async function getUserDocViaRest(uid: string): Promise<{ exists: boolean; data: 
   return { exists: true, data: fromFirestoreFields(json.fields) };
 }
 
-async function writeUserDocViaRest(uid: string, payload: Record<string, any>, updateKeys?: string[]): Promise<void> {
+function normalizeUserDocumentTimestamps(data: any): any {
+  if (!data || typeof data !== 'object') return data;
+  const out = { ...data };
+  if (out.updatedAt !== undefined) out.updatedAt = normalizeTimestampToIso(out.updatedAt);
+  if (out.profileUpdatedAt !== undefined) out.profileUpdatedAt = normalizeTimestampToIso(out.profileUpdatedAt);
+  if (out.resumeUpdatedAt !== undefined) {
+    out.resumeUpdatedAt = out.resumeUpdatedAt === '' ? '' : normalizeTimestampToIso(out.resumeUpdatedAt);
+  }
+  return out;
+}
+
+async function commitWithServerTimestampsViaRest(
+  relativeDocPath: string,
+  payload: Record<string, any>,
+  serverTimestampFields: string[],
+  updateMaskKeys?: string[]
+): Promise<{ commitTime: string; timestamps: Record<string, string> }> {
   if (!auth.currentUser) throw new Error('Not signed in');
   const idToken = await auth.currentUser.getIdToken();
-  const baseUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}`;
-  const params = updateKeys && updateKeys.length > 0
-    ? '?' + updateKeys.map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&')
-    : '';
-  const res = await fetchWithTimeout(`${baseUrl}${params}`, {
-    method: 'PATCH',
+  const dbPath = `projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents`;
+  const commitUrl = `https://firestore.googleapis.com/v1/${dbPath}:commit`;
+
+  const cleanPayload: Record<string, any> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (!serverTimestampFields.includes(k)) {
+      cleanPayload[k] = v;
+    }
+  }
+
+  const write: Record<string, any> = {
+    update: {
+      name: `${dbPath}/${relativeDocPath}`,
+      fields: toFirestoreFields(cleanPayload),
+    },
+    updateTransforms: serverTimestampFields.map((fieldPath) => ({
+      fieldPath,
+      setToServerValue: 'REQUEST_TIME',
+    })),
+  };
+
+  if (updateMaskKeys && updateMaskKeys.length > 0) {
+    write.updateMask = {
+      fieldPaths: updateMaskKeys.filter((k) => !serverTimestampFields.includes(k)),
+    };
+  }
+
+  const res = await fetchWithTimeout(commitUrl, {
+    method: 'POST',
     headers: {
       Authorization: `Bearer ${idToken}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ fields: toFirestoreFields(payload) }),
+    body: JSON.stringify({ writes: [write] }),
   });
+
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody?.error?.message || `Firestore REST PATCH failed (${res.status})`);
+    throw new Error(errBody?.error?.message || `Firestore REST commit failed (${res.status})`);
   }
+
+  const json = await res.json().catch(() => ({}));
+  const commitTime = normalizeTimestampToIso(json?.commitTime) || new Date().toISOString();
+  const transformResults = Array.isArray(json?.writeResults?.[0]?.transformResults)
+    ? json.writeResults[0].transformResults
+    : [];
+  const timestamps: Record<string, string> = {};
+  serverTimestampFields.forEach((field, idx) => {
+    const rawTs = transformResults[idx]?.timestampValue;
+    timestamps[field] = normalizeTimestampToIso(rawTs) || commitTime;
+  });
+
+  return { commitTime, timestamps };
+}
+
+async function writeUserDocViaRest(
+  uid: string,
+  payload: Record<string, any>,
+  serverTimestampFields: string[],
+  updateKeys?: string[]
+): Promise<{ commitTime: string; timestamps: Record<string, string> }> {
+  return commitWithServerTimestampsViaRest(
+    `users/${encodeURIComponent(uid)}`,
+    payload,
+    serverTimestampFields,
+    updateKeys
+  );
+}
+
+export interface SyncProfileOptions {
+  isNewUser?: boolean;
+  markProfileUpdated?: boolean;
+  markResumeUpdated?: boolean;
+  clearResumeUpdated?: boolean;
 }
 
 /**
  * Sync user profile document in Firestore
- * - On create: saves { uid, email, role, createdAt, ... } with only allowed public roles ('student' | 'recruiter' | 'experienced')
- * - On update: never mutates role, uid, or createdAt
- * - Falls back to authenticated Firestore REST API if the WebChannel client reports offline
+ * - On create: saves { uid, email, role, createdAt, updatedAt: serverTimestamp(), ... }
+ * - On update: never mutates role, uid, or createdAt; writes serverTimestamp() for updatedAt,
+ *   and sets profileUpdatedAt / resumeUpdatedAt using serverTimestamp() only when explicitly triggered.
+ * - Falls back to authenticated Firestore REST API (:commit with REQUEST_TIME transforms) if WebChannel reports offline.
  */
 export async function syncUserProfileToFirestore(
   uid: string,
   profile: any,
-  options?: { isNewUser?: boolean }
+  options?: SyncProfileOptions
 ): Promise<any | null> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return null;
   }
 
   const userRef = doc(db, 'users', uid);
-  const now = new Date().toISOString();
+  const fallbackNow = new Date().toISOString();
 
   const appendExtendedFields = (target: Record<string, any>, source: Record<string, any>) => {
     const stringFields: Array<[string, number]> = [
@@ -568,7 +818,6 @@ export async function syncUserProfileToFirestore(
       ['linkedinUrl', 300],
       ['portfolioUrl', 300],
       ['resumeFileName', 200],
-      ['resumeUpdatedAt', 64],
       ['photoUrl', 1000],
     ];
     for (const [key, maxLen] of stringFields) {
@@ -610,6 +859,44 @@ export async function syncUserProfileToFirestore(
     if (Array.isArray(source.enrolledCourses)) {
       target.enrolledCourses = source.enrolledCourses.slice(0, 100);
     }
+    if (Array.isArray(source.projects)) {
+      target.projects = source.projects.slice(0, 50);
+    }
+  };
+
+  const serverTimestampFields: string[] = ['updatedAt'];
+  if (options?.markProfileUpdated) serverTimestampFields.push('profileUpdatedAt');
+  if (options?.markResumeUpdated) serverTimestampFields.push('resumeUpdatedAt');
+
+  const buildSdkTimestampPatch = () => {
+    const patch: Record<string, any> = { updatedAt: serverTimestamp() };
+    if (options?.markProfileUpdated) patch.profileUpdatedAt = serverTimestamp();
+    if (options?.markResumeUpdated) patch.resumeUpdatedAt = serverTimestamp();
+    else if (options?.clearResumeUpdated) patch.resumeUpdatedAt = '';
+    return patch;
+  };
+
+  const needsTimestampReadBack = Boolean(options?.markProfileUpdated || options?.markResumeUpdated);
+
+  const resolveSdkCommittedTimestamps = async (baseObj: Record<string, any>) => {
+    if (needsTimestampReadBack) {
+      try {
+        const snap = await withSdkTimeout(getDoc(userRef), 'Firestore getDoc after write');
+        if (snap.exists()) {
+          return normalizeUserDocumentTimestamps(snap.data());
+        }
+      } catch {
+        // Non-fatal; fall back to local ISO timestamp when offline/cached
+      }
+    }
+    const resolved: Record<string, any> = {
+      ...baseObj,
+      updatedAt: fallbackNow,
+    };
+    if (options?.markProfileUpdated) resolved.profileUpdatedAt = fallbackNow;
+    if (options?.markResumeUpdated) resolved.resumeUpdatedAt = fallbackNow;
+    else if (options?.clearResumeUpdated) resolved.resumeUpdatedAt = '';
+    return normalizeUserDocumentTimestamps(resolved);
   };
 
   const buildCreatePayload = () => {
@@ -624,37 +911,68 @@ export async function syncUserProfileToFirestore(
       name: String(profile.name || auth.currentUser?.displayName || 'Yuva Member').slice(0, 100),
       email: String(profile.email || auth.currentUser?.email || '').toLowerCase().slice(0, 160),
       role: safeRole,
-      createdAt: profile.createdAt || now,
-      updatedAt: now,
+      createdAt: profile.createdAt || fallbackNow,
     };
     appendExtendedFields(createPayload, profile);
+    if (options?.clearResumeUpdated) {
+      createPayload.resumeUpdatedAt = '';
+    }
     return createPayload;
   };
 
+  // If a background initial creation for this UID is still in flight, await it before issuing an update
+  if (!options?.isNewUser && pendingProfileCreateByUid.has(uid)) {
+    await pendingProfileCreateByUid.get(uid)?.catch(() => {});
+  }
+
   try {
-    // Fast path for newly created accounts: skip getDoc and create directly
+    // Fast path for newly created accounts: skip getDoc + read-back and save only essential initial fields
     if (options?.isNewUser) {
       const createPayload = buildCreatePayload();
-      if (preferRestFirestore) {
-        await writeUserDocViaRest(uid, createPayload);
-        return createPayload;
-      }
-      try {
-        await withSdkTimeout(setDoc(userRef, createPayload), 'Firestore setDoc');
-      } catch (sdkWriteErr: any) {
-        if (isOfflineOrUnavailableError(sdkWriteErr)) {
-          preferRestFirestore = true;
-          await writeUserDocViaRest(uid, createPayload);
-        } else {
+      const createTask = (async () => {
+        if (preferRestFirestore) {
+          const { timestamps } = await writeUserDocViaRest(uid, createPayload, serverTimestampFields);
+          const normalized = normalizeUserDocumentTimestamps({ ...createPayload, ...timestamps });
+          setCachedRead(`profile:${uid}`, normalized);
+          return normalized;
+        }
+        try {
+          await withSdkTimeout(
+            setDoc(userRef, { ...createPayload, ...buildSdkTimestampPatch() }),
+            'Firestore setDoc'
+          );
+          const normalized = normalizeUserDocumentTimestamps({ ...createPayload, updatedAt: fallbackNow });
+          setCachedRead(`profile:${uid}`, normalized);
+          return normalized;
+        } catch (sdkWriteErr: any) {
+          if (isOfflineOrUnavailableError(sdkWriteErr)) {
+            preferRestFirestore = true;
+            const { timestamps } = await writeUserDocViaRest(uid, createPayload, serverTimestampFields);
+            const normalized = normalizeUserDocumentTimestamps({ ...createPayload, ...timestamps });
+            setCachedRead(`profile:${uid}`, normalized);
+            return normalized;
+          }
           throw sdkWriteErr;
         }
+      })();
+      pendingProfileCreateByUid.set(uid, createTask);
+      try {
+        return await createTask;
+      } finally {
+        if (pendingProfileCreateByUid.get(uid) === createTask) {
+          pendingProfileCreateByUid.delete(uid);
+        }
       }
-      return createPayload;
     }
 
+    // Reuse cached profile existence when available to avoid an extra getDoc before updateDoc
+    const cachedExisting = getCachedRead<any>(`profile:${uid}`);
     let docExists = false;
     let existingData: any = null;
-    if (preferRestFirestore) {
+    if (cachedExisting.hit && cachedExisting.value) {
+      docExists = true;
+      existingData = cachedExisting.value;
+    } else if (preferRestFirestore) {
       const restDoc = await getUserDocViaRest(uid);
       docExists = restDoc.exists;
       existingData = restDoc.data;
@@ -676,45 +994,78 @@ export async function syncUserProfileToFirestore(
     }
 
     if (docExists) {
-      const updatePayload: Record<string, any> = {
-        updatedAt: now,
-      };
+      const updatePayload: Record<string, any> = {};
       if (profile.name) updatePayload.name = String(profile.name).slice(0, 100);
-      if (profile.email) updatePayload.email = String(profile.email).toLowerCase().slice(0, 160);
+      if (profile.email) updatePayload.email = String(profile.email).slice(0, 160).toLowerCase();
       appendExtendedFields(updatePayload, profile);
+      if (options?.clearResumeUpdated) {
+        updatePayload.resumeUpdatedAt = '';
+      }
 
       if (preferRestFirestore) {
-        await writeUserDocViaRest(uid, updatePayload, Object.keys(updatePayload));
+        const { timestamps } = await writeUserDocViaRest(
+          uid,
+          updatePayload,
+          serverTimestampFields,
+          Object.keys(updatePayload)
+        );
+        const merged = normalizeUserDocumentTimestamps({ ...(existingData || {}), ...updatePayload, ...timestamps });
+        setCachedRead(`profile:${uid}`, merged);
+        return merged;
       } else {
         try {
-          await withSdkTimeout(updateDoc(userRef, updatePayload), 'Firestore updateDoc');
+          await withSdkTimeout(
+            updateDoc(userRef, { ...updatePayload, ...buildSdkTimestampPatch() }),
+            'Firestore updateDoc'
+          );
+          const merged = await resolveSdkCommittedTimestamps({ ...(existingData || {}), ...updatePayload });
+          setCachedRead(`profile:${uid}`, merged);
+          return merged;
         } catch (sdkUpdateErr: any) {
           if (isOfflineOrUnavailableError(sdkUpdateErr)) {
             preferRestFirestore = true;
-            await writeUserDocViaRest(uid, updatePayload, Object.keys(updatePayload));
+            const { timestamps } = await writeUserDocViaRest(
+              uid,
+              updatePayload,
+              serverTimestampFields,
+              Object.keys(updatePayload)
+            );
+            const merged = normalizeUserDocumentTimestamps({ ...(existingData || {}), ...updatePayload, ...timestamps });
+            setCachedRead(`profile:${uid}`, merged);
+            return merged;
           } else {
             throw sdkUpdateErr;
           }
         }
       }
-      return { ...(existingData || {}), ...updatePayload };
     } else {
       const createPayload = buildCreatePayload();
       if (preferRestFirestore) {
-        await writeUserDocViaRest(uid, createPayload);
+        const { timestamps } = await writeUserDocViaRest(uid, createPayload, serverTimestampFields);
+        const created = normalizeUserDocumentTimestamps({ ...createPayload, ...timestamps });
+        setCachedRead(`profile:${uid}`, created);
+        return created;
       } else {
         try {
-          await withSdkTimeout(setDoc(userRef, createPayload), 'Firestore setDoc');
+          await withSdkTimeout(
+            setDoc(userRef, { ...createPayload, ...buildSdkTimestampPatch() }),
+            'Firestore setDoc'
+          );
+          const created = await resolveSdkCommittedTimestamps(createPayload);
+          setCachedRead(`profile:${uid}`, created);
+          return created;
         } catch (sdkWriteErr: any) {
           if (isOfflineOrUnavailableError(sdkWriteErr)) {
             preferRestFirestore = true;
-            await writeUserDocViaRest(uid, createPayload);
+            const { timestamps } = await writeUserDocViaRest(uid, createPayload, serverTimestampFields);
+            const created = normalizeUserDocumentTimestamps({ ...createPayload, ...timestamps });
+            setCachedRead(`profile:${uid}`, created);
+            return created;
           } else {
             throw sdkWriteErr;
           }
         }
       }
-      return createPayload;
     }
   } catch (err: any) {
     if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
@@ -726,39 +1077,46 @@ export async function syncUserProfileToFirestore(
   }
 }
 
-export async function getUserProfileFromFirestore(uid: string): Promise<any | null> {
+export async function getUserProfileFromFirestore(uid: string, forceRefresh: boolean = false): Promise<any | null> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return null;
   }
 
-  const userRef = doc(db, 'users', uid);
-  try {
-    if (preferRestFirestore) {
-      const restDoc = await getUserDocViaRest(uid);
-      return restDoc.exists ? restDoc.data : null;
-    }
-    try {
-      const snap = await withSdkTimeout(getDoc(userRef), 'Firestore getDoc');
-      if (snap.exists()) {
-        return snap.data();
+  return cachedFirestoreRead(
+    `profile:${uid}`,
+    USER_DOC_CACHE_TTL_MS,
+    async () => {
+      const userRef = doc(db, 'users', uid);
+      try {
+        if (preferRestFirestore) {
+          const restDoc = await getUserDocViaRest(uid);
+          return restDoc.exists ? normalizeUserDocumentTimestamps(restDoc.data) : null;
+        }
+        try {
+          const snap = await withSdkTimeout(getDoc(userRef), 'Firestore getDoc');
+          if (snap.exists()) {
+            return normalizeUserDocumentTimestamps(snap.data());
+          }
+          return null;
+        } catch (sdkReadErr: any) {
+          if (isOfflineOrUnavailableError(sdkReadErr)) {
+            preferRestFirestore = true;
+            const restDoc = await getUserDocViaRest(uid);
+            return restDoc.exists ? normalizeUserDocumentTimestamps(restDoc.data) : null;
+          }
+          throw sdkReadErr;
+        }
+      } catch (err: any) {
+        if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+          console.warn('Firestore profile read skipped:', err?.message || err);
+          return null;
+        }
+        handleFirestoreError(err, OperationType.GET, `users/${uid}`);
+        return null;
       }
-      return null;
-    } catch (sdkReadErr: any) {
-      if (isOfflineOrUnavailableError(sdkReadErr)) {
-        preferRestFirestore = true;
-        const restDoc = await getUserDocViaRest(uid);
-        return restDoc.exists ? restDoc.data : null;
-      }
-      throw sdkReadErr;
-    }
-  } catch (err: any) {
-    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
-      console.warn('Firestore profile read skipped:', err?.message || err);
-      return null;
-    }
-    handleFirestoreError(err, OperationType.GET, `users/${uid}`);
-    return null;
-  }
+    },
+    forceRefresh
+  );
 }
 
 export interface SavedResumeDoc {
@@ -789,25 +1147,24 @@ async function getResumeDocViaRest(uid: string): Promise<SavedResumeDoc | null> 
   return {
     fileName: String(data.fileName || ''),
     text: String(data.text || ''),
-    updatedAt: String(data.updatedAt || ''),
+    updatedAt: normalizeTimestampToIso(data.updatedAt),
   };
 }
 
-async function writeResumeDocViaRest(uid: string, payload: SavedResumeDoc): Promise<void> {
-  if (!auth.currentUser) throw new Error('Not signed in');
-  const idToken = await auth.currentUser.getIdToken();
-  const res = await fetchWithTimeout(resumeRestUrl(uid), {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${idToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ fields: toFirestoreFields(payload) }),
-  });
-  if (!res.ok) {
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody?.error?.message || `Firestore REST PATCH resume failed (${res.status})`);
-  }
+async function writeResumeDocViaRest(
+  uid: string,
+  payload: { fileName: string; text: string }
+): Promise<SavedResumeDoc> {
+  const { timestamps, commitTime } = await commitWithServerTimestampsViaRest(
+    `users/${encodeURIComponent(uid)}/resume/current`,
+    { fileName: payload.fileName, text: payload.text },
+    ['updatedAt']
+  );
+  return {
+    fileName: payload.fileName,
+    text: payload.text,
+    updatedAt: timestamps.updatedAt || commitTime,
+  };
 }
 
 async function deleteResumeDocViaRest(uid: string): Promise<void> {
@@ -825,8 +1182,9 @@ async function deleteResumeDocViaRest(uid: string): Promise<void> {
 }
 
 /**
- * Save extracted resume text, filename, and timestamp to Firestore at users/{uid}/resume/current
- * (overwrites the single document on every re-upload; never stores the raw file binary).
+ * Save extracted resume text, filename, and Firestore serverTimestamp() to users/{uid}/resume/current
+ * (overwrites the single document on every upload/replacement/edit; never stores raw file binary).
+ * Also updates users/{uid}.resumeUpdatedAt via serverTimestamp() in the background.
  */
 export async function saveExtractedResumeToFirestore(
   uid: string,
@@ -836,33 +1194,67 @@ export async function saveExtractedResumeToFirestore(
     throw new Error('Sign in to save your resume.');
   }
 
-  const docData: SavedResumeDoc = {
-    fileName: String(payload.fileName || 'resume.pdf').trim().slice(0, 200) || 'resume.pdf',
-    text: String(payload.text || '').trim().slice(0, 150000),
-    updatedAt: String(payload.updatedAt || new Date().toISOString()).slice(0, 64),
-  };
+  const cleanFileName = String(payload.fileName || 'resume.pdf').trim().slice(0, 200) || 'resume.pdf';
+  const cleanText = String(payload.text || '').trim().slice(0, 150000);
 
-  if (!docData.text) {
+  if (!cleanText) {
     throw new Error('Cannot save an empty resume.');
   }
 
   const resumeRef = doc(db, 'users', uid, 'resume', 'current');
   const path = `users/${uid}/resume/current`;
 
+  const syncUserResumeMeta = () => {
+    syncUserProfileToFirestore(
+      uid,
+      { resumeFileName: cleanFileName },
+      { markResumeUpdated: true }
+    ).catch(() => {});
+  };
+
   try {
     if (preferRestFirestore) {
-      await writeResumeDocViaRest(uid, docData);
-      return docData;
+      const saved = await writeResumeDocViaRest(uid, { fileName: cleanFileName, text: cleanText });
+      setCachedRead(`resume:${uid}`, saved, USER_DOC_CACHE_TTL_MS);
+      syncUserResumeMeta();
+      return saved;
     }
 
     try {
-      await withSdkTimeout(setDoc(resumeRef, docData), 'Firestore setDoc resume');
-      return docData;
+      await withSdkTimeout(
+        setDoc(resumeRef, {
+          fileName: cleanFileName,
+          text: cleanText,
+          updatedAt: serverTimestamp(),
+        }),
+        'Firestore setDoc resume'
+      );
+
+      let committedIso = '';
+      try {
+        const snap = await withSdkTimeout(getDoc(resumeRef), 'Firestore getDoc resume after write');
+        if (snap.exists()) {
+          committedIso = normalizeTimestampToIso(snap.data()?.updatedAt);
+        }
+      } catch {
+        // Fallback to local ISO timestamp if immediate read-back times out
+      }
+
+      const savedDoc: SavedResumeDoc = {
+        fileName: cleanFileName,
+        text: cleanText,
+        updatedAt: committedIso || new Date().toISOString(),
+      };
+      setCachedRead(`resume:${uid}`, savedDoc, USER_DOC_CACHE_TTL_MS);
+      syncUserResumeMeta();
+      return savedDoc;
     } catch (sdkErr: any) {
       if (isOfflineOrUnavailableError(sdkErr)) {
         preferRestFirestore = true;
-        await writeResumeDocViaRest(uid, docData);
-        return docData;
+        const saved = await writeResumeDocViaRest(uid, { fileName: cleanFileName, text: cleanText });
+        setCachedRead(`resume:${uid}`, saved, USER_DOC_CACHE_TTL_MS);
+        syncUserResumeMeta();
+        return saved;
       }
       throw sdkErr;
     }
@@ -883,47 +1275,58 @@ export async function saveExtractedResumeToFirestore(
 /**
  * Read saved resume document from Firestore at users/{uid}/resume/current.
  */
-export async function getSavedResumeFromFirestore(uid: string): Promise<SavedResumeDoc | null> {
+export async function getSavedResumeFromFirestore(
+  uid: string,
+  forceRefresh: boolean = false
+): Promise<SavedResumeDoc | null> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return null;
   }
 
-  const resumeRef = doc(db, 'users', uid, 'resume', 'current');
-  const path = `users/${uid}/resume/current`;
+  return cachedFirestoreRead<SavedResumeDoc | null>(
+    `resume:${uid}`,
+    USER_DOC_CACHE_TTL_MS,
+    async () => {
+      const resumeRef = doc(db, 'users', uid, 'resume', 'current');
+      const path = `users/${uid}/resume/current`;
 
-  try {
-    if (preferRestFirestore) {
-      return await getResumeDocViaRest(uid);
-    }
-    try {
-      const snap = await withSdkTimeout(getDoc(resumeRef), 'Firestore getDoc resume');
-      if (!snap.exists()) return null;
-      const data = snap.data() as Partial<SavedResumeDoc> | undefined;
-      if (!data?.text && !data?.fileName) return null;
-      return {
-        fileName: String(data.fileName || ''),
-        text: String(data.text || ''),
-        updatedAt: String(data.updatedAt || ''),
-      };
-    } catch (sdkErr: any) {
-      if (isOfflineOrUnavailableError(sdkErr)) {
-        preferRestFirestore = true;
-        return await getResumeDocViaRest(uid);
+      try {
+        if (preferRestFirestore) {
+          return await getResumeDocViaRest(uid);
+        }
+        try {
+          const snap = await withSdkTimeout(getDoc(resumeRef), 'Firestore getDoc resume');
+          if (!snap.exists()) return null;
+          const data = snap.data() as Record<string, any> | undefined;
+          if (!data?.text && !data?.fileName) return null;
+          return {
+            fileName: String(data.fileName || ''),
+            text: String(data.text || ''),
+            updatedAt: normalizeTimestampToIso(data.updatedAt),
+          };
+        } catch (sdkErr: any) {
+          if (isOfflineOrUnavailableError(sdkErr)) {
+            preferRestFirestore = true;
+            return await getResumeDocViaRest(uid);
+          }
+          throw sdkErr;
+        }
+      } catch (err: any) {
+        if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+          console.warn('Firestore saved resume read skipped:', err?.message || err);
+          return null;
+        }
+        handleFirestoreError(err, OperationType.GET, path);
+        return null;
       }
-      throw sdkErr;
-    }
-  } catch (err: any) {
-    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
-      console.warn('Firestore saved resume read skipped:', err?.message || err);
-      return null;
-    }
-    handleFirestoreError(err, OperationType.GET, path);
-    return null;
-  }
+    },
+    forceRefresh
+  );
 }
 
 /**
- * Delete saved resume document from Firestore at users/{uid}/resume/current.
+ * Delete saved resume document from Firestore at users/{uid}/resume/current
+ * and clear resume metadata on users/{uid}.
  */
 export async function deleteSavedResumeFromFirestore(uid: string): Promise<void> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
@@ -933,17 +1336,31 @@ export async function deleteSavedResumeFromFirestore(uid: string): Promise<void>
   const resumeRef = doc(db, 'users', uid, 'resume', 'current');
   const path = `users/${uid}/resume/current`;
 
+  const clearUserResumeMeta = () => {
+    syncUserProfileToFirestore(
+      uid,
+      { resumeFileName: '' },
+      { clearResumeUpdated: true }
+    ).catch(() => {});
+  };
+
   try {
     if (preferRestFirestore) {
       await deleteResumeDocViaRest(uid);
+      setCachedRead(`resume:${uid}`, null, USER_DOC_CACHE_TTL_MS);
+      clearUserResumeMeta();
       return;
     }
     try {
       await withSdkTimeout(deleteDoc(resumeRef), 'Firestore deleteDoc resume');
+      setCachedRead(`resume:${uid}`, null, USER_DOC_CACHE_TTL_MS);
+      clearUserResumeMeta();
     } catch (sdkErr: any) {
       if (isOfflineOrUnavailableError(sdkErr)) {
         preferRestFirestore = true;
         await deleteResumeDocViaRest(uid);
+        setCachedRead(`resume:${uid}`, null, USER_DOC_CACHE_TTL_MS);
+        clearUserResumeMeta();
         return;
       }
       throw sdkErr;
@@ -1063,15 +1480,18 @@ export async function saveStudentRecommendationsToFirestore(
   try {
     if (preferRestFirestore) {
       await writeViaRest();
+      setCachedRead(`recs:${uid}`, payload, USER_DOC_CACHE_TTL_MS);
       return payload;
     }
     try {
       await withSdkTimeout(setDoc(recRef, payload), 'Firestore setDoc recommendations');
+      setCachedRead(`recs:${uid}`, payload, USER_DOC_CACHE_TTL_MS);
       return payload;
     } catch (sdkErr: any) {
       if (isOfflineOrUnavailableError(sdkErr)) {
         preferRestFirestore = true;
         await writeViaRest();
+        setCachedRead(`recs:${uid}`, payload, USER_DOC_CACHE_TTL_MS);
         return payload;
       }
       throw sdkErr;
@@ -1090,56 +1510,64 @@ export async function saveStudentRecommendationsToFirestore(
  * Load private student recommendations from users/{uid}/recommendations/current.
  */
 export async function getStudentRecommendationsFromFirestore(
-  uid: string
+  uid: string,
+  forceRefresh: boolean = false
 ): Promise<PersistedRecommendationsPayload | null> {
   if (!auth.currentUser || auth.currentUser.uid !== uid) {
     return null;
   }
 
-  const recRef = doc(db, 'users', uid, 'recommendations', 'current');
-  const path = `users/${uid}/recommendations/current`;
+  return cachedFirestoreRead<PersistedRecommendationsPayload | null>(
+    `recs:${uid}`,
+    USER_DOC_CACHE_TTL_MS,
+    async () => {
+      const recRef = doc(db, 'users', uid, 'recommendations', 'current');
+      const path = `users/${uid}/recommendations/current`;
 
-  const readViaRest = async (): Promise<PersistedRecommendationsPayload | null> => {
-    const idToken = await auth.currentUser!.getIdToken();
-    const res = await fetchWithTimeout(recommendationsRestUrl(uid), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${idToken}` },
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody?.error?.message || `Firestore REST GET recommendations failed (${res.status})`);
-    }
-    const json = await res.json();
-    const data = fromFirestoreFields(json.fields);
-    if (!data || !Array.isArray(data.recommendations)) return null;
-    return data as PersistedRecommendationsPayload;
-  };
+      const readViaRest = async (): Promise<PersistedRecommendationsPayload | null> => {
+        const idToken = await auth.currentUser!.getIdToken();
+        const res = await fetchWithTimeout(recommendationsRestUrl(uid), {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        if (res.status === 404) return null;
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody?.error?.message || `Firestore REST GET recommendations failed (${res.status})`);
+        }
+        const json = await res.json();
+        const data = fromFirestoreFields(json.fields);
+        if (!data || !Array.isArray(data.recommendations)) return null;
+        return data as PersistedRecommendationsPayload;
+      };
 
-  try {
-    if (preferRestFirestore) {
-      return await readViaRest();
-    }
-    try {
-      const snap = await withSdkTimeout(getDoc(recRef), 'Firestore getDoc recommendations');
-      if (!snap.exists()) return null;
-      const data = snap.data();
-      if (!data || !Array.isArray(data.recommendations)) return null;
-      return data as PersistedRecommendationsPayload;
-    } catch (sdkErr: any) {
-      if (isOfflineOrUnavailableError(sdkErr)) {
-        preferRestFirestore = true;
-        return await readViaRest();
+      try {
+        if (preferRestFirestore) {
+          return await readViaRest();
+        }
+        try {
+          const snap = await withSdkTimeout(getDoc(recRef), 'Firestore getDoc recommendations');
+          if (!snap.exists()) return null;
+          const data = snap.data();
+          if (!data || !Array.isArray(data.recommendations)) return null;
+          return data as PersistedRecommendationsPayload;
+        } catch (sdkErr: any) {
+          if (isOfflineOrUnavailableError(sdkErr)) {
+            preferRestFirestore = true;
+            return await readViaRest();
+          }
+          throw sdkErr;
+        }
+      } catch (err: any) {
+        if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+          return null;
+        }
+        handleFirestoreError(err, OperationType.GET, path);
+        return null;
       }
-      throw sdkErr;
-    }
-  } catch (err: any) {
-    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
-      return null;
-    }
-    handleFirestoreError(err, OperationType.GET, path);
-    return null;
-  }
+    },
+    forceRefresh
+  );
 }
 
 function sanitizeFirestoreInternshipId(rawId: string): string {
@@ -1189,54 +1617,63 @@ function sanitizeInternshipForFirestore(internship: InternshipListing): Internsh
 /**
  * Read verified internships from Firestore /internships collection (SDK + REST fallback).
  */
-export async function getVerifiedInternshipsFromFirestore(): Promise<InternshipListing[]> {
+export async function getVerifiedInternshipsFromFirestore(
+  forceRefresh: boolean = false
+): Promise<InternshipListing[]> {
   if (!auth.currentUser) {
     return [];
   }
 
-  const path = 'internships';
+  return cachedFirestoreRead<InternshipListing[]>(
+    'internships:verified',
+    CATALOG_CACHE_TTL_MS,
+    async () => {
+      const path = 'internships';
 
-  const readViaRest = async (): Promise<InternshipListing[]> => {
-    const idToken = await auth.currentUser!.getIdToken();
-    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/internships?pageSize=100`;
-    const res = await fetchWithTimeout(url, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${idToken}` },
-    });
-    if (res.status === 404) return [];
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      throw new Error(errBody?.error?.message || `Firestore REST GET internships failed (${res.status})`);
-    }
-    const json = await res.json();
-    const docs = Array.isArray(json.documents) ? json.documents : [];
-    return docs
-      .map((d: any) => fromFirestoreFields(d.fields) as InternshipListing)
-      .filter((item: InternshipListing) => item && item.verifiedStatus === 'Verified');
-  };
+      const readViaRest = async (): Promise<InternshipListing[]> => {
+        const idToken = await auth.currentUser!.getIdToken();
+        const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/internships?pageSize=100`;
+        const res = await fetchWithTimeout(url, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        if (res.status === 404) return [];
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody?.error?.message || `Firestore REST GET internships failed (${res.status})`);
+        }
+        const json = await res.json();
+        const docs = Array.isArray(json.documents) ? json.documents : [];
+        return docs
+          .map((d: any) => fromFirestoreFields(d.fields) as InternshipListing)
+          .filter((item: InternshipListing) => item && item.verifiedStatus === 'Verified');
+      };
 
-  try {
-    if (preferRestFirestore) {
-      return await readViaRest();
-    }
-    try {
-      const q = query(collection(db, 'internships'), where('verifiedStatus', '==', 'Verified'));
-      const snap = await withSdkTimeout(getDocs(q), 'Firestore getDocs internships');
-      return snap.docs.map((d) => d.data() as InternshipListing);
-    } catch (sdkErr: any) {
-      if (isOfflineOrUnavailableError(sdkErr)) {
-        preferRestFirestore = true;
-        return await readViaRest();
+      try {
+        if (preferRestFirestore) {
+          return await readViaRest();
+        }
+        try {
+          const q = query(collection(db, 'internships'), where('verifiedStatus', '==', 'Verified'));
+          const snap = await withSdkTimeout(getDocs(q), 'Firestore getDocs internships');
+          return snap.docs.map((d) => d.data() as InternshipListing);
+        } catch (sdkErr: any) {
+          if (isOfflineOrUnavailableError(sdkErr)) {
+            preferRestFirestore = true;
+            return await readViaRest();
+          }
+          throw sdkErr;
+        }
+      } catch (err: any) {
+        if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+          return [];
+        }
+        handleFirestoreError(err, OperationType.LIST, path);
+        return [];
       }
-      throw sdkErr;
-    }
-  } catch (err: any) {
-    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
-      return [];
-    }
-    handleFirestoreError(err, OperationType.LIST, path);
-    return [];
-  }
+    },
+    forceRefresh
+  );
 }
 
 /**
@@ -1274,15 +1711,18 @@ export async function saveVerifiedInternshipToFirestore(
   try {
     if (preferRestFirestore) {
       await writeViaRest();
+      invalidateCacheKey('internships:verified');
       return true;
     }
     try {
       await withSdkTimeout(setDoc(ref, clean), 'Firestore setDoc internship');
+      invalidateCacheKey('internships:verified');
       return true;
     } catch (sdkErr: any) {
       if (isOfflineOrUnavailableError(sdkErr)) {
         preferRestFirestore = true;
         await writeViaRest();
+        invalidateCacheKey('internships:verified');
         return true;
       }
       throw sdkErr;
@@ -1322,15 +1762,18 @@ export async function deleteVerifiedInternshipFromFirestore(internshipId: string
   try {
     if (preferRestFirestore) {
       await deleteViaRest();
+      invalidateCacheKey('internships:verified');
       return true;
     }
     try {
       await withSdkTimeout(deleteDoc(ref), 'Firestore deleteDoc internship');
+      invalidateCacheKey('internships:verified');
       return true;
     } catch (sdkErr: any) {
       if (isOfflineOrUnavailableError(sdkErr)) {
         preferRestFirestore = true;
         await deleteViaRest();
+        invalidateCacheKey('internships:verified');
         return true;
       }
       throw sdkErr;
@@ -1340,6 +1783,383 @@ export async function deleteVerifiedInternshipFromFirestore(internshipId: string
       return false;
     }
     handleFirestoreError(err, OperationType.DELETE, path);
+    return false;
+  }
+}
+
+function sanitizeFirestoreDocId(rawId: string, prefix: string): string {
+  const cleaned = String(rawId || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .slice(0, 128);
+  return cleaned || `${prefix}-${Date.now()}`;
+}
+
+function sanitizeCertificateForFirestore(uid: string, cert: Certificate): Record<string, any> {
+  const id = sanitizeFirestoreDocId(cert.id, 'cert');
+  const now = new Date().toISOString();
+  const payload: Record<string, any> = {
+    id,
+    userId: uid,
+    certificateCode: String(cert.certificateCode || `YM-${Date.now()}`).trim().slice(0, 80),
+    studentName: String(cert.studentName || 'Yuva Member').trim().slice(0, 120),
+    courseId: String(cert.courseId || 'external-upload').trim().slice(0, 128),
+    courseTitle: String(cert.courseTitle || 'Verified Certificate').trim().slice(0, 200),
+    issueDate: String(cert.issueDate || now.split('T')[0]).trim().slice(0, 64),
+    scorePercentage: Math.max(0, Math.min(100, Number(cert.scorePercentage ?? 100) || 0)),
+    qrData: String(cert.qrData || `https://yuvamitraa.gov.in/verify/${cert.certificateCode || id}`).trim().slice(0, 500),
+    instructor: String(cert.instructor || cert.issuer || 'YuvaMitraa').trim().slice(0, 160),
+    source: cert.source === 'uploaded' ? 'uploaded' : 'earned',
+    createdAt: now,
+  };
+  if (cert.issuer) payload.issuer = String(cert.issuer).trim().slice(0, 160);
+  if (cert.credentialUrl) payload.credentialUrl = String(cert.credentialUrl).trim().slice(0, 500);
+  if (cert.fileName) payload.fileName = String(cert.fileName).trim().slice(0, 200);
+  return payload;
+}
+
+/**
+ * Fetch strictly the currently authenticated user's certificates from users/{uid}/certificates.
+ */
+export async function getUserCertificatesFromFirestore(
+  uid: string,
+  forceRefresh: boolean = false
+): Promise<Certificate[]> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    return [];
+  }
+
+  return cachedFirestoreRead<Certificate[]>(
+    `certs:${uid}`,
+    USER_DOC_CACHE_TTL_MS,
+    async () => {
+      const path = `users/${uid}/certificates`;
+
+      const readViaRest = async (): Promise<Certificate[]> => {
+        const idToken = await auth.currentUser!.getIdToken();
+        const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}/certificates?pageSize=100`;
+        const res = await fetchWithTimeout(url, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${idToken}` },
+        });
+        if (res.status === 404) return [];
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody?.error?.message || `Firestore REST GET certificates failed (${res.status})`);
+        }
+        const json = await res.json();
+        const docs = Array.isArray(json.documents) ? json.documents : [];
+        return docs
+          .map((d: any) => fromFirestoreFields(d.fields) as Certificate)
+          .filter((c: Certificate) => c && c.id && c.userId === uid);
+      };
+
+      try {
+        if (preferRestFirestore) {
+          return await readViaRest();
+        }
+        try {
+          const q = query(collection(db, 'users', uid, 'certificates'), where('userId', '==', uid));
+          const snap = await withSdkTimeout(getDocs(q), 'Firestore getDocs user certificates');
+          return snap.docs
+            .map((d) => d.data() as Certificate)
+            .filter((c) => c && c.userId === uid);
+        } catch (sdkErr: any) {
+          if (isOfflineOrUnavailableError(sdkErr)) {
+            preferRestFirestore = true;
+            return await readViaRest();
+          }
+          throw sdkErr;
+        }
+      } catch (err: any) {
+        if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+          return [];
+        }
+        handleFirestoreError(err, OperationType.LIST, path);
+        return [];
+      }
+    },
+    forceRefresh
+  );
+}
+
+/**
+ * Persist a certificate strictly under users/{uid}/certificates/{certId}.
+ */
+export async function saveUserCertificateToFirestore(
+  uid: string,
+  cert: Certificate
+): Promise<Certificate | null> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    return null;
+  }
+
+  const payload = sanitizeCertificateForFirestore(uid, cert);
+  const path = `users/${uid}/certificates/${payload.id}`;
+  const ref = doc(db, 'users', uid, 'certificates', payload.id);
+
+  const writeViaRest = async (): Promise<void> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}/certificates/${encodeURIComponent(payload.id)}`;
+    const res = await fetchWithTimeout(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields: toFirestoreFields(payload) }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST PATCH certificate failed (${res.status})`);
+    }
+  };
+
+  try {
+    if (preferRestFirestore) {
+      await writeViaRest();
+      invalidateCacheKey(`certs:${uid}`);
+      return payload as Certificate;
+    }
+    try {
+      await withSdkTimeout(setDoc(ref, payload), 'Firestore setDoc user certificate');
+      invalidateCacheKey(`certs:${uid}`);
+      return payload as Certificate;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await writeViaRest();
+        invalidateCacheKey(`certs:${uid}`);
+        return payload as Certificate;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return null;
+    }
+    handleFirestoreError(err, OperationType.WRITE, path);
+    return null;
+  }
+}
+
+/**
+ * Delete a certificate strictly owned by uid at users/{uid}/certificates/{certId}.
+ */
+export async function deleteUserCertificateFromFirestore(uid: string, certId: string): Promise<boolean> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid || !certId) {
+    return false;
+  }
+  const cleanId = sanitizeFirestoreDocId(certId, 'cert');
+  const path = `users/${uid}/certificates/${cleanId}`;
+  const ref = doc(db, 'users', uid, 'certificates', cleanId);
+
+  const deleteViaRest = async (): Promise<void> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${encodeURIComponent(uid)}/certificates/${encodeURIComponent(cleanId)}`;
+    const res = await fetchWithTimeout(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+    if (res.status === 404) return;
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST DELETE certificate failed (${res.status})`);
+    }
+  };
+
+  try {
+    if (preferRestFirestore) {
+      await deleteViaRest();
+      invalidateCacheKey(`certs:${uid}`);
+      return true;
+    }
+    try {
+      await withSdkTimeout(deleteDoc(ref), 'Firestore deleteDoc user certificate');
+      invalidateCacheKey(`certs:${uid}`);
+      return true;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await deleteViaRest();
+        invalidateCacheKey(`certs:${uid}`);
+        return true;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return false;
+    }
+    handleFirestoreError(err, OperationType.DELETE, path);
+    return false;
+  }
+}
+
+/**
+ * Fetch strictly the currently authenticated user's applications from /applications where userId == uid.
+ */
+export async function getUserApplicationsFromFirestore(
+  uid: string,
+  forceRefresh: boolean = false
+): Promise<Application[]> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid) {
+    return [];
+  }
+
+  return cachedFirestoreRead<Application[]>(
+    `apps:${uid}`,
+    USER_DOC_CACHE_TTL_MS,
+    async () => {
+      const path = 'applications';
+
+      const readViaRest = async (): Promise<Application[]> => {
+        const idToken = await auth.currentUser!.getIdToken();
+        const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents:runQuery`;
+        const res = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            structuredQuery: {
+              from: [{ collectionId: 'applications' }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: 'userId' },
+                  op: 'EQUAL',
+                  value: { stringValue: uid },
+                },
+              },
+              limit: 100,
+            },
+          }),
+        });
+        if (!res.ok) return [];
+        const rows = await res.json();
+        if (!Array.isArray(rows)) return [];
+        return rows
+          .filter((row: any) => row?.document?.fields)
+          .map((row: any) => {
+            const d = fromFirestoreFields(row.document.fields);
+            return {
+              ...d,
+              candidateId: d.userId || d.candidateId,
+            } as Application;
+          })
+          .filter((a: Application) => a && a.id && (a.candidateId === uid || (a as any).userId === uid));
+      };
+
+      try {
+        if (preferRestFirestore) {
+          return await readViaRest();
+        }
+        try {
+          const q = query(collection(db, 'applications'), where('userId', '==', uid));
+          const snap = await withSdkTimeout(getDocs(q), 'Firestore getDocs user applications');
+          return snap.docs.map((d) => {
+            const data = d.data() as any;
+            return {
+              ...data,
+              candidateId: data.userId || data.candidateId,
+            } as Application;
+          });
+        } catch (sdkErr: any) {
+          if (isOfflineOrUnavailableError(sdkErr)) {
+            preferRestFirestore = true;
+            return await readViaRest();
+          }
+          throw sdkErr;
+        }
+      } catch (err: any) {
+        if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+          return [];
+        }
+        handleFirestoreError(err, OperationType.LIST, path);
+        return [];
+      }
+    },
+    forceRefresh
+  );
+}
+
+/**
+ * Persist an authenticated user's application record to Firestore /applications/{id} with userId == uid.
+ */
+export async function saveUserApplicationToFirestore(uid: string, app: Application): Promise<boolean> {
+  if (!auth.currentUser || auth.currentUser.uid !== uid || !app?.id || !app?.jobId) {
+    return false;
+  }
+
+  const cleanId = sanitizeFirestoreDocId(app.id, 'app');
+  const payload: Record<string, any> = {
+    id: cleanId,
+    jobId: String(app.jobId).slice(0, 128),
+    userId: uid,
+    jobTitle: String(app.jobTitle || '').slice(0, 200),
+    company: String(app.company || '').slice(0, 200),
+    candidateName: String(app.candidateName || '').slice(0, 120),
+    candidateEmail: String(app.candidateEmail || '').slice(0, 160),
+    candidatePhone: String(app.candidatePhone || '').slice(0, 32),
+    candidateCollege: String(app.candidateCollege || '').slice(0, 200),
+    status: app.status || 'Applied',
+    appliedDate: String(app.appliedDate || new Date().toISOString().split('T')[0]).slice(0, 64),
+    coverLetter: String(app.coverLetter || '').slice(0, 3000),
+  };
+  if (typeof app.matchScore === 'number') payload.matchScore = app.matchScore;
+  if (app.updatedDate) payload.updatedDate = String(app.updatedDate).slice(0, 64);
+  if (app.interviewDate) payload.interviewDate = String(app.interviewDate).slice(0, 32);
+  if (app.interviewTime) payload.interviewTime = String(app.interviewTime).slice(0, 32);
+  if (app.interviewMode) payload.interviewMode = String(app.interviewMode).slice(0, 64);
+  if (app.interviewLinkOrVenue) payload.interviewLinkOrVenue = String(app.interviewLinkOrVenue).slice(0, 300);
+  if (app.recruiterFeedback) payload.recruiterFeedback = String(app.recruiterFeedback).slice(0, 1000);
+  if (app.notes) payload.notes = String(app.notes).slice(0, 1000);
+
+  const path = `applications/${cleanId}`;
+  const ref = doc(db, 'applications', cleanId);
+
+  const writeViaRest = async (): Promise<void> => {
+    const idToken = await auth.currentUser!.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/applications/${encodeURIComponent(cleanId)}`;
+    const res = await fetchWithTimeout(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ fields: toFirestoreFields(payload) }),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Firestore REST PATCH application failed (${res.status})`);
+    }
+  };
+
+  try {
+    if (preferRestFirestore) {
+      await writeViaRest();
+      invalidateCacheKey(`apps:${uid}`);
+      return true;
+    }
+    try {
+      await withSdkTimeout(setDoc(ref, payload), 'Firestore setDoc user application');
+      invalidateCacheKey(`apps:${uid}`);
+      return true;
+    } catch (sdkErr: any) {
+      if (isOfflineOrUnavailableError(sdkErr)) {
+        preferRestFirestore = true;
+        await writeViaRest();
+        invalidateCacheKey(`apps:${uid}`);
+        return true;
+      }
+      throw sdkErr;
+    }
+  } catch (err: any) {
+    if (isOfflineOrUnavailableError(err) || isFirestoreServiceDisabledError(err)) {
+      return false;
+    }
+    handleFirestoreError(err, OperationType.WRITE, path);
     return false;
   }
 }

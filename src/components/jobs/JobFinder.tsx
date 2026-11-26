@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Search, 
   MapPin, 
@@ -39,6 +39,7 @@ import {
   matchJobWithStudentProfile
 } from '../../utils/opportunityFilter';
 import { RecommendedForYou } from '../recommendations/RecommendedForYou';
+import { LastUpdatedBadge } from '../common/LastUpdatedBadge';
 
 export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false }) => {
   const { 
@@ -52,6 +53,7 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
     calculateDistance,
     isLoadingOpportunities,
     opportunitiesError,
+    opportunitiesLastSyncedAt,
     firestoreInternshipsCount,
     refreshOpportunities,
     isLoadingRecommendations,
@@ -70,6 +72,8 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [isLocating, setIsLocating] = useState(false);
   const [selectedMapPinJob, setSelectedMapPinJob] = useState<Job | null>(null);
+  const ITEMS_PER_PAGE = 12;
+  const [currentPage, setCurrentPage] = useState<number>(1);
 
   // Voice Search State
   const [isListening, setIsListening] = useState(false);
@@ -163,6 +167,24 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
   };
 
   const profileHasSignals = useMemo(() => hasStudentProfileSignals(user), [user]);
+  const userSkillSet = useMemo(
+    () => (user?.skills || []).map((s) => s.toLowerCase()),
+    [user?.skills]
+  );
+
+  // Reset pagination whenever filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [
+    searchKeyword,
+    selectedCategory,
+    selectedType,
+    selectedSource,
+    matchMyProfileOnly,
+    minStipend,
+    maxRadiusKm,
+    savedOnly,
+  ]);
 
   const filteredJobs = useMemo(() => {
     const list = jobs.filter((job) => {
@@ -703,13 +725,22 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
         <div className="space-y-3.5">
           <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 px-1 flex flex-wrap items-center justify-between gap-2">
             <span>
-              Showing {filteredJobs.length} verified &amp; public opportunities
+              Showing {filteredJobs.length === 0 ? 0 : Math.min(currentPage * ITEMS_PER_PAGE, filteredJobs.length)} of {filteredJobs.length} verified &amp; public opportunities
               {matchMyProfileOnly && profileHasSignals ? ' matching your student profile' : ''}
             </span>
-            <span className="text-[11px] text-emerald-600 font-bold flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Arbeitnow • Remotive • Verified Firestore • Zero Fake Listings</span>
-            </span>
+            <div className="flex flex-wrap items-center gap-3">
+              {opportunitiesLastSyncedAt && (
+                <LastUpdatedBadge
+                  label="Feed"
+                  timestamp={opportunitiesLastSyncedAt}
+                  emptyText="Live"
+                />
+              )}
+              <span className="text-[11px] text-emerald-600 font-bold flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Arbeitnow • Remotive • Verified Firestore • Zero Expired/Fake Listings</span>
+              </span>
+            </div>
           </div>
 
           {filteredJobs.length === 0 ? (
@@ -753,12 +784,11 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
               )}
             </div>
           ) : (
-            filteredJobs.map((job) => {
+            filteredJobs.slice(0, currentPage * ITEMS_PER_PAGE).map((job) => {
               const isRemoteOrGlobal = isRemoteOrGlobalLocation(job.location, job.type, job.opportunitySource);
               const distance = !isRemoteOrGlobal ? calculateDistance(job.coordinates) : 0;
               const isSaved = (savedJobIds || []).includes(job.id);
               const profileMatch = matchJobWithStudentProfile(job, user);
-              const userSkillSet = (user?.skills || []).map(s => s.toLowerCase());
               const matchedCount = (job.requiredSkills || []).filter(s => 
                 userSkillSet.some(us => us.includes(s.toLowerCase()) || s.toLowerCase().includes(us))
               ).length;
@@ -965,6 +995,29 @@ export const JobFinder: React.FC<{ savedOnly?: boolean }> = ({ savedOnly = false
                 </div>
               );
             })
+          )}
+
+          {/* Pagination Controls for Large Opportunity Lists */}
+          {filteredJobs.length > currentPage * ITEMS_PER_PAGE && (
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => p + 1)}
+                className="px-5 py-2.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-[#FF7A00] text-slate-800 dark:text-slate-100 text-xs font-bold shadow-xs transition-all cursor-pointer flex items-center gap-2"
+              >
+                <span>
+                  Load More ({Math.min(ITEMS_PER_PAGE, filteredJobs.length - currentPage * ITEMS_PER_PAGE)} more of {filteredJobs.length - currentPage * ITEMS_PER_PAGE} remaining)
+                </span>
+                <ChevronRight className="w-3.5 h-3.5 text-[#FF7A00]" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setCurrentPage(Math.ceil(filteredJobs.length / ITEMS_PER_PAGE))}
+                className="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/70 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 text-xs font-semibold transition-all cursor-pointer"
+              >
+                Show All ({filteredJobs.length})
+              </button>
+            </div>
           )}
         </div>
       )}

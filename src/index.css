@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
@@ -64,3 +65,438 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94A3B8;
 }
+
+/* ==========================================================================
+   YuvaMitraa Responsive Authentication Layout (Desktop / Tablet / Mobile)
+   Breakpoints:
+     - Desktop: >= 1024px (Two-column architectural split layout)
+     - Tablet:  768px – 1023px (Balanced adaptive card; 2-col in landscape)
+     - Mobile:  < 768px (Single-column, zero horizontal overflow, 16px inputs)
+   ========================================================================== */
+
+.ym-auth-page {
+  min-height: 100dvh;
+  width: 100%;
+  overflow-x: clip;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background-color: #F4F6FA;
+  background-image:
+    radial-gradient(circle at 12% 10%, rgba(255, 122, 0, 0.08) 0%, transparent 42%),
+    radial-gradient(circle at 88% 92%, rgba(2, 132, 199, 0.07) 0%, transparent 44%);
+  color: #0F172A;
+  transition: padding 200ms cubic-bezier(0.16, 1, 0.3, 1), background-color 200ms ease;
+}
+
+body.dark .ym-auth-page {
+  background-color: #0B1120;
+  background-image:
+    radial-gradient(circle at 12% 10%, rgba(255, 122, 0, 0.12) 0%, transparent 44%),
+    radial-gradient(circle at 88% 92%, rgba(2, 132, 199, 0.1) 0%, transparent 46%);
+  color: #F8FAFC;
+}
+
+.ym-auth-shell {
+  width: 100%;
+  max-width: 460px;
+  display: grid;
+  grid-template-columns: 1fr;
+  border-radius: 20px;
+  overflow: hidden;
+  background-color: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 20px 50px -20px rgba(15, 23, 42, 0.14);
+  transition: max-width 220ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 220ms ease;
+}
+
+body.dark .ym-auth-shell {
+  background-color: #111827;
+  border-color: #1F2937;
+  box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.55);
+}
+
+.ym-auth-brand-panel {
+  position: relative;
+  background-color: #0F172A;
+  background-image:
+    radial-gradient(circle at 100% 0%, rgba(255, 122, 0, 0.22) 0%, transparent 48%),
+    radial-gradient(circle at 0% 100%, rgba(2, 132, 199, 0.18) 0%, transparent 46%),
+    radial-gradient(rgba(148, 163, 184, 0.14) 1px, transparent 1px);
+  background-size: auto, auto, 24px 24px;
+  color: #F8FAFC;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ym-auth-brand-details {
+  display: none;
+}
+
+.ym-auth-brand-highlights {
+  display: none;
+}
+
+.ym-auth-brand-footer {
+  display: none;
+}
+
+.ym-auth-form-panel {
+  background-color: #FFFFFF;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+body.dark .ym-auth-form-panel {
+  background-color: #111827;
+}
+
+.ym-auth-form-inner {
+  width: 100%;
+  max-width: 420px;
+  margin-inline: auto;
+  min-width: 0;
+}
+
+/* Mobile-safe inputs (>= 16px on small viewports prevents iOS/Android auto-zoom) */
+.ym-auth-input {
+  width: 100%;
+  min-height: 46px;
+  font-size: 16px;
+  line-height: 1.4;
+  border-radius: 12px;
+  background-color: #F8FAFC;
+  border: 1px solid #CBD5E1;
+  color: #0F172A;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.ym-auth-input::placeholder {
+  color: #94A3B8;
+}
+
+.ym-auth-input:focus {
+  outline: none;
+  background-color: #FFFFFF;
+  border-color: #FF7A00;
+  box-shadow: 0 0 0 3px rgba(255, 122, 0, 0.16);
+}
+
+body.dark .ym-auth-input {
+  background-color: #0F172A;
+  border-color: #334155;
+  color: #F8FAFC;
+}
+
+body.dark .ym-auth-input::placeholder {
+  color: #64748B;
+}
+
+body.dark .ym-auth-input:focus {
+  background-color: #0B1220;
+  border-color: #FF7A00;
+  box-shadow: 0 0 0 3px rgba(255, 122, 0, 0.22);
+}
+
+.ym-auth-btn {
+  min-height: 46px;
+  transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), background-color 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.ym-auth-btn:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.ym-auth-tabs {
+  background-color: #F1F5F9;
+  border: 1px solid #E2E8F0;
+}
+
+body.dark .ym-auth-tabs {
+  background-color: #1E293B;
+  border-color: #334155;
+}
+
+.ym-auth-tab-idle {
+  color: #475569;
+}
+
+.ym-auth-tab-idle:hover {
+  color: #0F172A;
+}
+
+body.dark .ym-auth-tab-idle {
+  color: #CBD5E1;
+}
+
+body.dark .ym-auth-tab-idle:hover {
+  color: #FFFFFF;
+}
+
+.ym-auth-divider-line {
+  border-top: 1px solid #E2E8F0;
+}
+
+body.dark .ym-auth-divider-line {
+  border-top-color: #334155;
+}
+
+.ym-auth-divider-label {
+  background-color: #FFFFFF;
+  color: #64748B;
+}
+
+body.dark .ym-auth-divider-label {
+  background-color: #111827;
+  color: #94A3B8;
+}
+
+.ym-auth-google-btn {
+  background-color: #FFFFFF;
+  border: 1px solid #CBD5E1;
+  color: #1E293B;
+}
+
+.ym-auth-google-btn:hover:not(:disabled) {
+  background-color: #F8FAFC;
+  border-color: #94A3B8;
+}
+
+body.dark .ym-auth-google-btn {
+  background-color: #0F172A;
+  border-color: #334155;
+  color: #F1F5F9;
+}
+
+body.dark .ym-auth-google-btn:hover:not(:disabled) {
+  background-color: #1E293B;
+  border-color: #475569;
+}
+
+.ym-auth-secondary-btn {
+  background-color: #F1F5F9;
+  border: 1px solid #E2E8F0;
+  color: #334155;
+}
+
+.ym-auth-secondary-btn:hover {
+  background-color: #E2E8F0;
+}
+
+body.dark .ym-auth-secondary-btn {
+  background-color: #1E293B;
+  border-color: #334155;
+  color: #E2E8F0;
+}
+
+body.dark .ym-auth-secondary-btn:hover {
+  background-color: #334155;
+}
+
+.ym-auth-role-btn {
+  background-color: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  color: #475569;
+}
+
+.ym-auth-role-btn:hover {
+  border-color: #CBD5E1;
+  color: #0F172A;
+}
+
+body.dark .ym-auth-role-btn {
+  background-color: #0F172A;
+  border-color: #334155;
+  color: #CBD5E1;
+}
+
+body.dark .ym-auth-role-btn:hover {
+  border-color: #475569;
+  color: #FFFFFF;
+}
+
+.ym-auth-role-btn--active {
+  background-color: #FFF7ED;
+  border-color: #FF7A00;
+  color: #C25A00;
+  font-weight: 600;
+}
+
+body.dark .ym-auth-role-btn--active {
+  background-color: rgba(255, 122, 0, 0.16);
+  border-color: #FF7A00;
+  color: #FDBA74;
+}
+
+.ym-auth-modal {
+  background-color: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  color: #475569;
+}
+
+body.dark .ym-auth-modal {
+  background-color: #111827;
+  border-color: #334155;
+  color: #CBD5E1;
+}
+
+.ym-auth-panel-fade {
+  animation: ymAuthFadeIn 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes ymAuthFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Mobile landscape orientation (< 768px) */
+@media (max-width: 767px) and (orientation: landscape) {
+  .ym-auth-page {
+    justify-content: flex-start;
+    padding: 12px 20px;
+  }
+  .ym-auth-shell {
+    max-width: 560px;
+  }
+  .ym-auth-brand-panel {
+    padding: 14px 20px;
+  }
+  .ym-auth-form-panel {
+    padding: 20px 24px;
+  }
+}
+
+/* Tablet Portrait & Standard Tablet (768px – 1023px) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .ym-auth-page {
+    padding: 32px 24px;
+  }
+  .ym-auth-shell {
+    max-width: 640px;
+    border-radius: 24px;
+  }
+  .ym-auth-brand-panel {
+    padding: 28px 36px;
+    gap: 14px;
+  }
+  .ym-auth-brand-details {
+    display: block;
+  }
+  .ym-auth-form-panel {
+    padding: 36px 40px;
+  }
+  .ym-auth-form-inner {
+    max-width: 460px;
+  }
+  .ym-auth-input {
+    font-size: 14px;
+    min-height: 44px;
+  }
+}
+
+/* Tablet Landscape (768px – 1023px, landscape orientation): Adaptive two-column split */
+@media (min-width: 768px) and (max-width: 1023px) and (orientation: landscape) {
+  .ym-auth-page {
+    padding: 20px 24px;
+  }
+  .ym-auth-shell {
+    max-width: 920px;
+    grid-template-columns: 0.92fr 1.08fr;
+    align-items: stretch;
+  }
+  .ym-auth-brand-panel {
+    padding: 32px 28px;
+  }
+  .ym-auth-brand-highlights {
+    display: flex;
+    flex-direction: column;
+  }
+  .ym-auth-brand-footer {
+    display: block;
+  }
+  .ym-auth-form-panel {
+    padding: 28px 32px;
+  }
+}
+
+/* Desktop (1024px and above): Spacious two-column layout */
+@media (min-width: 1024px) {
+  .ym-auth-page {
+    padding: 32px 40px;
+  }
+  .ym-auth-shell {
+    max-width: 1120px;
+    min-height: 640px;
+    grid-template-columns: 1.05fr 0.95fr;
+    align-items: stretch;
+    border-radius: 28px;
+    box-shadow: 0 28px 70px -24px rgba(15, 23, 42, 0.18);
+  }
+  .ym-auth-shell--compact {
+    max-width: 960px;
+    min-height: 560px;
+  }
+  .ym-auth-brand-panel {
+    padding: 48px 44px;
+    gap: 28px;
+  }
+  .ym-auth-brand-details {
+    display: block;
+  }
+  .ym-auth-brand-highlights {
+    display: flex;
+    flex-direction: column;
+  }
+  .ym-auth-brand-footer {
+    display: block;
+  }
+  .ym-auth-form-panel {
+    padding: 44px 48px;
+  }
+  .ym-auth-form-inner {
+    max-width: 420px;
+  }
+  .ym-auth-input {
+    font-size: 14px;
+    min-height: 44px;
+  }
+}
+
+/* Large Desktop (1280px and above) */
+@media (min-width: 1280px) {
+  .ym-auth-shell {
+    max-width: 1160px;
+  }
+  .ym-auth-brand-panel {
+    padding: 52px 52px;
+  }
+  .ym-auth-form-panel {
+    padding: 48px 56px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ym-auth-page,
+  .ym-auth-shell,
+  .ym-auth-input,
+  .ym-auth-btn,
+  .ym-auth-panel-fade {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+

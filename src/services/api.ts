@@ -1,5 +1,45 @@
 import { Job, UserProfile, EligibilityResult } from '../types';
 
+const inflightGetRequests = new Map<string, Promise<any>>();
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = 15000
+): Promise<Response> {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+  try {
+    return await fetch(url, {
+      ...init,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      const timeoutErr: any = new Error('The request timed out due to a slow network connection. Please try again.');
+      timeoutErr.code = 'auth/network-request-failed';
+      throw timeoutErr;
+    }
+    const netErr: any = new Error('Network connection unavailable. Please check your internet and try again.');
+    netErr.code = 'auth/network-request-failed';
+    throw netErr;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function deduplicatedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const existing = inflightGetRequests.get(key);
+  if (existing) return existing as Promise<T>;
+  const p = fetcher().finally(() => {
+    if (inflightGetRequests.get(key) === p) {
+      inflightGetRequests.delete(key);
+    }
+  });
+  inflightGetRequests.set(key, p);
+  return p;
+}
+
 export async function checkEligibility(job: Job, candidate: UserProfile): Promise<EligibilityResult> {
   const res = await fetch('/api/ai/eligibility', {
     method: 'POST',
@@ -24,12 +64,13 @@ export async function askStudyAssistantDetailed(
   message: string,
   history: { sender: string; text: string }[],
   language: string,
-  userContext: Partial<UserProfile>
+  userContext: Partial<UserProfile>,
+  focusMode: 'guidance' | 'interview' | 'communication' | 'career-path' = 'guidance'
 ): Promise<AIChatResponse> {
   const res = await fetch('/api/ai/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history, language, userContext }),
+    body: JSON.stringify({ message, history, language, userContext, focusMode }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -198,12 +239,12 @@ export async function translateText(text: string, targetLanguage: string): Promi
 // ------------------------------------------
 
 export async function loginApi(identifier: string, password: string, rememberMe: boolean = false) {
-  const res = await fetch('/api/auth/login', {
+  const res = await fetchWithTimeout('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ identifier, password, rememberMe }),
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err: any = new Error(data.error || 'Failed to authenticate');
     if (data.code) err.code = data.code;
@@ -257,12 +298,12 @@ export async function registerDirectApi(payload: {
 }) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (payload.idToken) headers['Authorization'] = `Bearer ${payload.idToken}`;
-  const res = await fetch('/api/auth/register', {
+  const res = await fetchWithTimeout('/api/auth/register', {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err: any = new Error(data.error || 'Registration failed');
     if (data.code) err.code = data.code;
@@ -440,7 +481,10 @@ export async function completeRegistrationApi(payload: RegisterCompleteData) {
   return data;
 }
 
-export async function updateProfileApi(token: string, profile: Partial<UserProfile>) {
+export async function updateProfileApi(
+  token: string,
+  profile: Partial<UserProfile> & { markProfileUpdated?: boolean }
+) {
   const res = await fetch('/api/user/profile', {
     method: 'POST',
     headers: {
@@ -468,16 +512,19 @@ export async function firebaseLoginApi(payload: {
   photoUrl?: string;
   currentRole?: string;
   yearsOfExperience?: string;
+  companyName?: string;
+  cinOrRegistrationNumber?: string;
+  rememberMe?: boolean;
 }) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (payload.idToken) headers['Authorization'] = `Bearer ${payload.idToken}`;
 
-  const res = await fetch('/api/auth/firebase-login', {
+  const res = await fetchWithTimeout('/api/auth/firebase-login', {
     method: 'POST',
     headers,
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err: any = new Error(data.error || 'Failed to authenticate Firebase session');
     if (data.code) err.code = data.code;
@@ -518,15 +565,17 @@ export async function googleSignInApi(oauthAccessToken: string, email: string, n
 }
 
 export async function fetchCurrentUserApi(token: string) {
-  const res = await fetch('/api/auth/me', {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
+  return deduplicatedGet(`auth-me:${token.slice(0, 12)}`, async () => {
+    const res = await fetchWithTimeout('/api/auth/me', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }, 10000);
+    if (!res.ok) {
+      throw new Error('Session invalid');
+    }
+    return await res.json();
   });
-  if (!res.ok) {
-    throw new Error('Session invalid');
-  }
-  return await res.json();
 }
 
 export async function logoutApi(token: string) {
@@ -692,7 +741,16 @@ export async function actionReportedJobApi(token: string, id: string, action: 'r
 // ------------------------------------------
 
 // 1. Opportunities APIs
-export async function fetchOpportunitiesApi(params?: { category?: string; type?: string; search?: string; collegeId?: string; creatorId?: string; showAll?: boolean }) {
+export async function fetchOpportunitiesApi(params?: {
+  category?: string;
+  type?: string;
+  search?: string;
+  collegeId?: string;
+  creatorId?: string;
+  showAll?: boolean;
+  page?: number;
+  limit?: number;
+}) {
   const query = new URLSearchParams();
   if (params?.category) query.set('category', params.category);
   if (params?.type) query.set('type', params.type);
@@ -700,11 +758,16 @@ export async function fetchOpportunitiesApi(params?: { category?: string; type?:
   if (params?.collegeId) query.set('collegeId', params.collegeId);
   if (params?.creatorId) query.set('creatorId', params.creatorId);
   if (params?.showAll) query.set('showAll', 'true');
+  if (params?.page) query.set('page', String(params.page));
+  if (params?.limit) query.set('limit', String(params.limit));
 
-  const res = await fetch(`/api/opportunities?${query.toString()}`);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to fetch opportunities');
-  return data;
+  const qs = query.toString();
+  return deduplicatedGet(`opportunities:${qs}`, async () => {
+    const res = await fetchWithTimeout(`/api/opportunities?${qs}`, {}, 15000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch opportunities');
+    return data;
+  });
 }
 
 export async function postOpportunityApi(token: string | null, payload: any) {
@@ -773,10 +836,13 @@ export async function fetchApplicationsApi(
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`/api/applications?${query.toString()}`, { headers });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to fetch applications');
-  return data;
+  const qs = query.toString();
+  return deduplicatedGet(`applications:${token?.slice(0, 10) || 'anon'}:${qs}`, async () => {
+    const res = await fetchWithTimeout(`/api/applications?${qs}`, { headers }, 12000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to fetch applications');
+    return data;
+  });
 }
 
 export async function applyOpportunityApi(token: string | null, payload: { jobId: string; coverLetter?: string; matchScore?: number; candidateEmail?: string; candidateName?: string }) {
@@ -812,6 +878,27 @@ export async function updateApplicationStatusApi(token: string | null, applicati
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Failed to update application status');
+  return data;
+}
+
+export async function updateApplicationScheduleApi(token: string | null, applicationId: string, payload: {
+  status?: string;
+  interviewDate?: string;
+  interviewTime?: string;
+  interviewMode?: 'Online (Google Meet/Zoom)' | 'In-Person / Campus';
+  interviewLinkOrVenue?: string;
+  notes?: string;
+}) {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`/api/applications/${encodeURIComponent(applicationId)}/schedule`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to update interview schedule');
   return data;
 }
 
@@ -905,15 +992,19 @@ export async function fetchNotificationsApi(token?: string, role?: string) {
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const query = role ? `?role=${role}` : '';
 
-  const res = await fetch(`/api/notifications${query}`, { headers });
-  const data = await res.json();
-  if (!res.ok) throw new Error('Failed to fetch notifications');
-  return data;
+  return deduplicatedGet(`notifications:${token?.slice(0, 10) || 'anon'}:${query}`, async () => {
+    const res = await fetchWithTimeout(`/api/notifications${query}`, { headers }, 12000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error('Failed to fetch notifications');
+    return data;
+  });
 }
 
-export async function markNotificationReadApi(id: string) {
-  const res = await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
-  return await res.json();
+export async function markNotificationReadApi(id: string, token?: string | null) {
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`/api/notifications/${id}/read`, { method: 'POST', headers });
+  return await res.json().catch(() => ({}));
 }
 
 // 7. Student Projects API
@@ -931,18 +1022,80 @@ export async function saveStudentProjectApi(token: string, project: { id?: strin
   return data;
 }
 
-// 8. Certificates API
-export async function issueCertificateApi(token: string, courseId: string, score: number) {
+// 8. Certificates API (Strictly UID-Isolated)
+export async function fetchCertificatesApi(token: string) {
+  return deduplicatedGet(`certificates:${token.slice(0, 10)}`, async () => {
+    const res = await fetchWithTimeout('/api/certificates', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    }, 12000);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to load certificates');
+    return data;
+  });
+}
+
+export async function issueCertificateApi(
+  token: string,
+  courseId: string,
+  score: number,
+  extra?: {
+    id?: string;
+    certificateCode?: string;
+    courseTitle?: string;
+    instructor?: string;
+    issueDate?: string;
+    qrData?: string;
+  }
+) {
   const res = await fetch('/api/certificates/issue', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`
     },
-    body: JSON.stringify({ courseId, score })
+    body: JSON.stringify({ courseId, score, ...(extra || {}) })
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Failed to issue certificate');
+  return data;
+}
+
+export async function uploadCertificateApi(
+  token: string,
+  payload: {
+    id?: string;
+    courseTitle: string;
+    issuer: string;
+    issueDate: string;
+    certificateCode?: string;
+    credentialUrl?: string;
+    fileName?: string;
+  }
+) {
+  const res = await fetch('/api/certificates/upload', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to upload certificate');
+  return data;
+}
+
+export async function deleteCertificateApi(token: string, certificateId: string) {
+  const res = await fetch(`/api/certificates/${encodeURIComponent(certificateId)}`, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to delete certificate');
   return data;
 }
 

@@ -43,14 +43,20 @@ export const LearnSection: React.FC<{ initialSubTab?: 'catalog' | 'player' | 'ce
           </div>
 
           {/* Quick Metrics */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <div className="px-3.5 py-2 rounded-2xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800 text-center">
               <span className="block text-xs text-[#0284C7]">Enrolled</span>
               <span className="text-base font-bold text-[#0284C7]">{user.enrolledCourses?.length || 0}</span>
             </div>
+            <div className="px-3.5 py-2 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-center">
+              <span className="block text-xs text-emerald-600 dark:text-emerald-400">Completed</span>
+              <span className="text-base font-bold text-emerald-600 dark:text-emerald-400">
+                {(user.enrolledCourses || []).filter((e) => e.passed).length}
+              </span>
+            </div>
             <div className="px-3.5 py-2 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-center">
-              <span className="block text-xs text-amber-600">Certificates</span>
-              <span className="text-base font-bold text-amber-600">{certificates.length}</span>
+              <span className="block text-xs text-amber-600 dark:text-amber-400">Certificates</span>
+              <span className="text-base font-bold text-amber-600 dark:text-amber-400">{certificates.length}</span>
             </div>
           </div>
         </div>

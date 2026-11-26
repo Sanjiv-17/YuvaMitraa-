@@ -36,9 +36,11 @@ export const CareerRoadmap: React.FC = () => {
   const [currentLevel, setCurrentLevel] = useState('Beginner');
   const [isGenerating, setIsGenerating] = useState(false);
   const [roadmapError, setRoadmapError] = useState<string | null>(null);
+  const roadmapStorageKey = user?.id ? `ym_roadmap_completed_${user.id}` : null;
   const [completedPhases, setCompletedPhases] = useState<number[]>(() => {
+    if (!roadmapStorageKey) return [];
     try {
-      const saved = localStorage.getItem('ym_roadmap_completed');
+      const saved = localStorage.getItem(roadmapStorageKey);
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -62,10 +64,26 @@ export const CareerRoadmap: React.FC = () => {
     topAdvice: string;
   } | null>(null);
 
-  // Sync completed phases to localStorage
+  // Reload or reset completed phases whenever the authenticated user changes
   useEffect(() => {
-    localStorage.setItem('ym_roadmap_completed', JSON.stringify(completedPhases));
-  }, [completedPhases]);
+    if (!roadmapStorageKey) {
+      setCompletedPhases([]);
+      return;
+    }
+    try {
+      const saved = localStorage.getItem(roadmapStorageKey);
+      setCompletedPhases(saved ? JSON.parse(saved) : []);
+    } catch {
+      setCompletedPhases([]);
+    }
+  }, [roadmapStorageKey]);
+
+  // Sync completed phases strictly to the current user's UID-scoped localStorage key
+  useEffect(() => {
+    if (roadmapStorageKey) {
+      localStorage.setItem(roadmapStorageKey, JSON.stringify(completedPhases));
+    }
+  }, [completedPhases, roadmapStorageKey]);
 
   const togglePhaseComplete = (phaseNumber: number) => {
     setCompletedPhases(prev => {

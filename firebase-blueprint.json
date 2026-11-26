@@ -168,7 +168,11 @@
         },
         "resumeUpdatedAt": {
           "type": "string",
-          "description": "ISO timestamp when resume text was extracted and saved"
+          "description": "Firestore serverTimestamp() (or ISO string for legacy records) recording when the user's resume was last uploaded or updated"
+        },
+        "profileUpdatedAt": {
+          "type": "string",
+          "description": "Firestore serverTimestamp() recording when the user last edited and saved their profile information"
         },
         "photoUrl": {
           "type": "string",
@@ -194,13 +198,17 @@
           "type": "array",
           "description": "Enrolled courses and completion progress"
         },
+        "projects": {
+          "type": "array",
+          "description": "Student portfolio projects"
+        },
         "createdAt": {
           "type": "string",
           "description": "ISO timestamp of account registration"
         },
         "updatedAt": {
           "type": "string",
-          "description": "ISO timestamp of last profile update"
+          "description": "Firestore serverTimestamp() of last user document update"
         }
       },
       "required": ["uid", "role", "email", "createdAt"]
@@ -229,21 +237,32 @@
     },
     "Application": {
       "title": "Application",
-      "description": "Student job application record",
+      "description": "Student job or internship application record with optional interview schedule and reminders",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "jobId": { "type": "string" },
-        "userId": { "type": "string" },
-        "candidateName": { "type": "string" },
-        "candidateEmail": { "type": "string" },
-        "candidatePhone": { "type": "string" },
-        "candidateCollege": { "type": "string" },
+        "id": { "type": "string", "maxLength": 128 },
+        "jobId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "jobTitle": { "type": "string", "maxLength": 200 },
+        "company": { "type": "string", "maxLength": 200 },
+        "candidateName": { "type": "string", "maxLength": 120 },
+        "candidateEmail": { "type": "string", "maxLength": 160 },
+        "candidatePhone": { "type": "string", "maxLength": 32 },
+        "candidateCollege": { "type": "string", "maxLength": 200 },
         "status": {
           "type": "string",
           "enum": ["Applied", "Under Review", "Shortlisted", "Interview", "Selected", "Rejected"]
         },
-        "appliedDate": { "type": "string" }
+        "appliedDate": { "type": "string", "maxLength": 64 },
+        "updatedDate": { "type": "string", "maxLength": 64 },
+        "coverLetter": { "type": "string", "maxLength": 3000 },
+        "matchScore": { "type": "number" },
+        "interviewDate": { "type": "string", "maxLength": 32 },
+        "interviewTime": { "type": "string", "maxLength": 32 },
+        "interviewMode": { "type": "string", "maxLength": 64 },
+        "interviewLinkOrVenue": { "type": "string", "maxLength": 300 },
+        "recruiterFeedback": { "type": "string", "maxLength": 1000 },
+        "notes": { "type": "string", "maxLength": 1000 }
       },
       "required": ["id", "jobId", "userId", "status", "appliedDate"]
     },
@@ -308,8 +327,7 @@
         },
         "updatedAt": {
           "type": "string",
-          "maxLength": 64,
-          "description": "ISO timestamp when resume was saved or overwritten"
+          "description": "Firestore serverTimestamp() recording when resume was uploaded, replaced, or updated"
         }
       },
       "required": ["fileName", "text", "updatedAt"]
@@ -344,6 +362,88 @@
         }
       },
       "required": ["userId", "profileSignature", "recommendations", "updatedAt"]
+    },
+    "UserCertificate": {
+      "title": "UserCertificate",
+      "description": "Earned or uploaded certificate strictly owned by a single authenticated user at users/{uid}/certificates/{certificateId}",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Unique certificate document ID"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Owner Firebase Authentication UID"
+        },
+        "certificateCode": {
+          "type": "string",
+          "maxLength": 80,
+          "description": "Verification code or credential ID"
+        },
+        "studentName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Recipient name"
+        },
+        "courseId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Course identifier or external-upload"
+        },
+        "courseTitle": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Certificate title or course name"
+        },
+        "issueDate": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Date issued (YYYY-MM-DD)"
+        },
+        "scorePercentage": {
+          "type": "number",
+          "description": "Exam score percentage (0-100)"
+        },
+        "qrData": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Verification URL encoded in QR"
+        },
+        "instructor": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Issuing instructor or organization"
+        },
+        "source": {
+          "type": "string",
+          "enum": ["earned", "uploaded"],
+          "description": "Whether the certificate was earned on YuvaMitraa or uploaded by the user"
+        },
+        "issuer": {
+          "type": "string",
+          "maxLength": 160,
+          "description": "Issuing organization name"
+        },
+        "credentialUrl": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional external verification URL"
+        },
+        "fileName": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Optional uploaded certificate filename"
+        },
+        "createdAt": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "ISO timestamp of certificate creation"
+        }
+      },
+      "required": ["id", "userId", "certificateCode", "studentName", "courseTitle", "issueDate"]
     }
   },
   "firestore": {
@@ -358,6 +458,10 @@
     "/users/{userId}/recommendations/{recId}": {
       "schema": "SavedRecommendations",
       "description": "Private personalized AI internship recommendation cache ('current') per student"
+    },
+    "/users/{userId}/certificates/{certificateId}": {
+      "schema": "UserCertificate",
+      "description": "Private earned and uploaded certificates strictly isolated per user UID"
     },
     "/admins/{adminId}": {
       "schema": "User",

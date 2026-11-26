@@ -37,14 +37,15 @@ const DEFAULT_GOAL: DailyGoal = {
 
 export const DailyGoalCard: React.FC = () => {
   const { user, updateUser, setActiveTab } = useApp();
+  const storageKey = user?.id ? `ym_daily_goal_${user.id}` : null;
 
-  const [goal, setGoal] = useState<DailyGoal>(() => {
-    const saved = localStorage.getItem('ym_daily_goal');
+  const loadGoalForKey = (key: string | null): DailyGoal => {
+    if (!key) return { ...DEFAULT_GOAL, lastUpdatedDate: new Date().toISOString().split('T')[0] };
+    const saved = localStorage.getItem(key);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         const today = new Date().toISOString().split('T')[0];
-        // If from another day, retain settings but reset completed minutes
         if (parsed.lastUpdatedDate !== today) {
           return {
             ...parsed,
@@ -54,22 +55,36 @@ export const DailyGoalCard: React.FC = () => {
           };
         }
         return parsed;
-      } catch (e) {
-        return DEFAULT_GOAL;
+      } catch {
+        return { ...DEFAULT_GOAL, lastUpdatedDate: new Date().toISOString().split('T')[0] };
       }
     }
-    return DEFAULT_GOAL;
-  });
+    return { ...DEFAULT_GOAL, lastUpdatedDate: new Date().toISOString().split('T')[0] };
+  };
+
+  const [goal, setGoal] = useState<DailyGoal>(() => loadGoalForKey(storageKey));
 
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(goal.title);
   const [editCategory, setEditCategory] = useState(goal.category);
   const [editTarget, setEditTarget] = useState(goal.targetMinutes);
 
-  // Sync to local storage
+  // Reload or reset goal whenever the authenticated user changes
   useEffect(() => {
-    localStorage.setItem('ym_daily_goal', JSON.stringify(goal));
-  }, [goal]);
+    const nextGoal = loadGoalForKey(storageKey);
+    setGoal(nextGoal);
+    setEditTitle(nextGoal.title);
+    setEditCategory(nextGoal.category);
+    setEditTarget(nextGoal.targetMinutes);
+    setIsEditing(false);
+  }, [storageKey]);
+
+  // Sync strictly to the current user's UID-scoped localStorage key
+  useEffect(() => {
+    if (storageKey) {
+      localStorage.setItem(storageKey, JSON.stringify(goal));
+    }
+  }, [goal, storageKey]);
 
   const presetGoals = [
     { title: 'React Hooks & State Management', category: 'Frontend Tech', target: 60 },

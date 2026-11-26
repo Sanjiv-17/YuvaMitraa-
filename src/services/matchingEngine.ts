@@ -686,6 +686,29 @@ export function scoreInternshipForStudent(
   const matchReason = `${reasonParts.join('; ')}.`;
   const suggestedResources = suggestResourcesForMissingSkills(missingSkills, candidate.title);
 
+  // Determine explicit eligibility status and missing qualifications
+  const eligibilityStatus: InternshipRecommendation['eligibilityStatus'] =
+    matchScore >= 72 && (missingSkills.length <= 1 || skillsScore >= 65) && educationScore >= 55
+      ? 'Eligible'
+      : matchScore >= 48 || skillsScore >= 40 || beginnerFriendly
+      ? 'Partially Eligible'
+      : 'Needs Upskilling';
+
+  const missingQualifications: string[] = [];
+  if (missingSkills.length > 0) {
+    missingQualifications.push(`Missing skills: ${missingSkills.slice(0, 4).join(', ')}`);
+  }
+  if (educationScore < 55) {
+    missingQualifications.push(
+      candidate.eligibility && candidate.eligibility.length > 8
+        ? `Check academic eligibility: ${candidate.eligibility}`
+        : 'Add your degree, branch, and graduation year to verify academic eligibility'
+    );
+  }
+  if (!isOppRemote && locationPreferenceScore < 50 && candidate.location) {
+    missingQualifications.push(`Location/mode requirement: ${candidate.workMode} in ${candidate.location}`);
+  }
+
   return {
     internshipId: candidate.id,
     jobId: candidate.jobId || candidate.id,
@@ -703,6 +726,8 @@ export function scoreInternshipForStudent(
     isVerified: candidate.isVerified,
     matchScore,
     matchTier: getMatchTier(matchScore),
+    eligibilityStatus,
+    missingQualifications,
     breakdown,
     matchReason,
     matchedSkills,
@@ -754,12 +779,17 @@ export function rankInternshipsForStudent(
   beginnerFriendlyCount: number;
   profileSignature: string;
 } {
-  // Filter to verified/active internship-compatible opportunities & deduplicate
+  // Filter to verified/active non-expired internship-compatible opportunities & deduplicate
+  const todayIso = new Date().toISOString().split('T')[0];
   const seen = new Set<string>();
   const validCandidates: UnifiedInternshipCandidate[] = [];
 
   for (const c of candidates) {
     if (c.verifiedStatus === 'Expired' || c.verifiedStatus === 'Rejected' || c.verifiedStatus === 'rejected') {
+      continue;
+    }
+    const deadlineStr = String(c.applicationDeadline || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(deadlineStr) && deadlineStr < todayIso) {
       continue;
     }
     const key = `${normalizeToken(c.title)}::${normalizeToken(c.companyName)}`;

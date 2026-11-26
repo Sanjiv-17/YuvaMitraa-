@@ -72,9 +72,22 @@ export class SyncEngine {
     }, intervalMs);
   }
 
-  public async ensureInitialSync(): Promise<void> {
-    if (this.initialSyncPromise) {
+  public async ensureInitialSync(maxWaitMs?: number): Promise<void> {
+    if (!this.initialSyncPromise) return;
+    if (!maxWaitMs || maxWaitMs <= 0) {
       await this.initialSyncPromise;
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.initialSyncPromise,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, maxWaitMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -119,30 +132,33 @@ export class SyncEngine {
     const results: AdapterSyncResult[] = [];
 
     try {
-      for (const [id, adapter] of this.adapters.entries()) {
-        if (!this.enabledSources.has(id)) {
-          continue;
-        }
+      const enabledAdapters = Array.from(this.adapters.entries())
+        .filter(([id]) => this.enabledSources.has(id))
+        .map(([, adapter]) => adapter);
 
-        try {
-          const result = await this.syncSource(adapter);
-          results.push(result);
-        } catch (sourceErr: any) {
-          const failedResult: AdapterSyncResult = {
-            sourceName: adapter.name,
-            sourceId: adapter.id,
-            status: 'FAILED',
-            fetchedCount: 0,
-            insertedCount: 0,
-            updatedCount: 0,
-            duplicateCount: 0,
-            expiredCount: 0,
-            errorMessage: sourceErr.message || 'Unknown source execution error',
-          };
-          this.recordSyncLog(failedResult);
-          results.push(failedResult);
-        }
-      }
+      const settled = await Promise.all(
+        enabledAdapters.map(async (adapter) => {
+          try {
+            return await this.syncSource(adapter);
+          } catch (sourceErr: any) {
+            const failedResult: AdapterSyncResult = {
+              sourceName: adapter.name,
+              sourceId: adapter.id,
+              status: 'FAILED',
+              fetchedCount: 0,
+              insertedCount: 0,
+              updatedCount: 0,
+              duplicateCount: 0,
+              expiredCount: 0,
+              errorMessage: sourceErr.message || 'Unknown source execution error',
+            };
+            this.recordSyncLog(failedResult);
+            return failedResult;
+          }
+        })
+      );
+
+      results.push(...settled);
 
       // Detect and mark expired listings across all collections
       this.detectAndMarkExpired();
@@ -264,19 +280,40 @@ export class SyncEngine {
   }
 
   /**
-   * Detect and mark past listings as Expired
+   * Detect, mark, and remove expired listings (>60 days stale or past deadline)
    */
   private detectAndMarkExpired() {
     const today = new Date().toISOString().split('T')[0];
+    const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
 
-    for (const item of this.internships.values()) {
-      if (item.applicationDeadline && /^\d{4}-\d{2}-\d{2}$/.test(item.applicationDeadline) && item.applicationDeadline < today) {
-        if (item.verifiedStatus !== 'Expired') {
-          item.verifiedStatus = 'Expired';
-          item.updatedAt = new Date().toISOString();
+    for (const [id, item] of this.internships.entries()) {
+      const deadlineStr = String(item.applicationDeadline || '').trim();
+      let isExpired = false;
+      if (/^\d{4}-\d{2}-\d{2}$/.test(deadlineStr) && deadlineStr < today) {
+        isExpired = true;
+      } else if (deadlineStr && !/rolling|open|ongoing|active/i.test(deadlineStr)) {
+        const parsed = Date.parse(deadlineStr);
+        if (!Number.isNaN(parsed) && parsed < nowMs - 24 * 60 * 60 * 1000) {
+          isExpired = true;
         }
       }
+      if (isExpired) {
+        this.internships.delete(id);
+      }
     }
+
+    for (const [id, job] of this.jobs.entries()) {
+      const createdMs = Date.parse(job.createdAt || '');
+      if (!Number.isNaN(createdMs) && nowMs - createdMs > sixtyDaysMs) {
+        this.jobs.delete(id);
+      }
+    }
+  }
+
+  public getLastSyncAt(): string {
+    const latest = this.syncLogs.find((l) => l.status === 'SUCCESS');
+    return latest?.lastSyncAt || new Date().toISOString();
   }
 
   private buildDedupeKey(title: string, company: string, location: string): string {

@@ -67,7 +67,7 @@ const MainScreenContent: React.FC = () => {
 };
 
 const AppContent: React.FC = () => {
-  const { isAuthenticated, isAdmin, viewportMode, setViewportMode, setActiveTab } = useApp();
+  const { isAuthenticated, isHydratingUserSession, isAdmin, user, viewportMode, setViewportMode, setActiveTab } = useApp();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pathname, setPathname] = useState<string>(() =>
     typeof window !== 'undefined' ? window.location.pathname : '/'
@@ -127,6 +127,27 @@ const AppContent: React.FC = () => {
     return <LoginScreen />;
   }
 
+  // Show a dedicated loading screen until the authenticated user's UID-scoped data has finished loading
+  if (isHydratingUserSession) {
+    return (
+      <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0F172A] flex flex-col items-center justify-center p-6 font-['Poppins',sans-serif]">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl px-8 py-10 shadow-xl flex flex-col items-center gap-4 max-w-sm w-full text-center">
+          <div className="w-12 h-12 rounded-2xl bg-orange-50 dark:bg-orange-950/50 border border-orange-200 dark:border-orange-900 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 animate-spin text-[#FF7A00]" />
+          </div>
+          <div className="space-y-1">
+            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              Loading Your YuvaMitraa Account
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Syncing your personal profile, certificates, courses, and internship applications...
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // If not authenticated, display public login screen
   if (!isAuthenticated) {
     return (
@@ -147,10 +168,12 @@ const AppContent: React.FC = () => {
     );
   }
 
+  const sessionWorkspaceKey = user.id || 'anon';
+
   // MOBILE SCREEN VIEWPORT: Fixed smartphone frame
   if (viewportMode === 'mobile') {
     return (
-      <div className="min-h-screen bg-slate-900 text-slate-900 dark:text-slate-100 flex flex-col items-center justify-start sm:justify-center p-1 sm:p-6 font-['Poppins',sans-serif]">
+      <div key={sessionWorkspaceKey} className="min-h-screen bg-slate-900 text-slate-900 dark:text-slate-100 flex flex-col items-center justify-start sm:justify-center p-1 sm:p-6 font-['Poppins',sans-serif]">
         
         {/* Viewport Control Bar */}
         <div className="w-full max-w-sm mb-3 flex items-center justify-between bg-slate-800/90 backdrop-blur-md px-4 py-2 rounded-2xl border border-slate-700 text-xs text-white shadow-lg">
@@ -221,7 +244,7 @@ const AppContent: React.FC = () => {
 
   // DESKTOP RESPONSIVE VIEWPORT: Full expansive desktop layout
   return (
-    <div className="min-h-screen bg-[#F8FAFC] dark:bg-[#0F172A] flex flex-col font-['Poppins',sans-serif] transition-colors">
+    <div key={sessionWorkspaceKey} className="min-h-screen bg-[#F8FAFC] dark:bg-[#0F172A] flex flex-col font-['Poppins',sans-serif] transition-colors">
       
       {/* Top Navigation Bar with Viewport Switcher */}
       <Navbar onOpenSettings={() => setIsSettingsOpen(true)} />
